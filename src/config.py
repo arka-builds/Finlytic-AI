@@ -19,6 +19,11 @@ MOCK_LLM = os.getenv(
     "true"
 ).strip().lower() == "true"
 
+# Demo mode: display password-reset codes in the UI (no email service yet).
+SHOW_RESET_CODE = os.getenv(
+    "FINLYTIC_SHOW_RESET_CODE", "true"
+).strip().lower() == "true"
+
 
 def is_llm_configured() -> bool:
     """Return True when live LLM configuration is available."""

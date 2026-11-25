@@ -1099,7 +1099,7 @@ def build_llm_prompt(question, context):
     # ========================================================
 
     return f"""
-You are FinanceAI, a personal finance assistant
+You are Finlytic AI, a personal finance assistant
 inside a portfolio application.
 
 Answer the user's question using ONLY the retrieved
@@ -1205,80 +1205,3 @@ def answer_question(question):
         question,
         df
     )
-
-
-# ============================================================
-# TERMINAL CHAT
-# ============================================================
-
-def run_chat():
-    """Run Finance Chat from the terminal."""
-
-    print(
-        "\n" + "=" * 45
-    )
-
-    print(
-        "        💬 FINANCE CHAT ASSISTANT"
-    )
-
-    print(
-        "=" * 45
-    )
-
-    print(
-        "Ask a question about your stored "
-        "financial data."
-    )
-
-    print(
-        "Type 'exit' to quit.\n"
-    )
-
-    while True:
-
-        question = input(
-            "You: "
-        ).strip()
-
-        if question.lower() in {
-            "exit",
-            "quit"
-        }:
-
-            print(
-                "Finance Chat closed."
-            )
-
-            break
-
-        try:
-
-            answer = answer_question(
-                question
-            )
-
-            print(
-                f"\nAssistant: {answer}\n"
-            )
-
-        except Exception as exc:
-
-            print(
-                "\nAssistant: Sorry, I couldn't "
-                "process that question."
-            )
-
-            print(
-                f"Technical error: "
-                f"{type(exc).__name__}\n"
-            )
-
-
-# ============================================================
-# RUN
-# ============================================================
-
-if __name__ == "__main__":
-
-    run_chat()

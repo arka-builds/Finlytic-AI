@@ -31,3 +31,12 @@ Thumbs.db
 
 # Logs
 *.log
+# Local application data and model caches
+data/users/
+data/auth.db
+data/finance.db
+.cache/
+models/
+
+# Tooling
+.pytest_cache/

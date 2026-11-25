@@ -1,8 +1,8 @@
-\# Personal Finance Knowledge Base
+# Personal Finance Knowledge Base
 
 
 
-\## Emergency Fund
+## Emergency Fund
 
 
 
@@ -18,7 +18,7 @@ A common budgeting guideline is to build several months of essential living expe
 
 
 
-\## Budgeting
+## Budgeting
 
 
 
@@ -46,7 +46,7 @@ A budget should be treated as a planning tool rather than a guarantee that futur
 
 
 
-\## Savings Rate
+## Savings Rate
 
 
 
@@ -66,7 +66,7 @@ The savings rate is only meaningful when the income and expense period being com
 
 
 
-\## Needs and Wants
+## Needs and Wants
 
 
 
@@ -82,7 +82,7 @@ The distinction is personal and can vary by situation.
 
 
 
-\## Debt Management
+## Debt Management
 
 
 
@@ -98,7 +98,7 @@ A person should review the terms of their specific debt before making major repa
 
 
 
-\## Financial Safety
+## Financial Safety
 
 
 
@@ -106,5 +106,5 @@ Personal finance information is educational and general. Financial decisions can
 
 
 
-FinanceAI should not invent facts that are not present in the user's transaction data or knowledge base. When important information is missing, it should say so.
+Finlytic AI should not invent facts that are not present in the user's transaction data or knowledge base. When important information is missing, it should say so.
 

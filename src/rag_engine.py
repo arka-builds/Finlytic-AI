@@ -7,7 +7,13 @@ from functools import lru_cache
 import re
 
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # Semantic model is optional; lexical retrieval remains available.
+    SentenceTransformer = None
 
 
 # ============================================================
@@ -20,7 +26,14 @@ KNOWLEDGE_BASE_DIR = BASE_DIR / "data" / "knowledge_base"
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 DEFAULT_TOP_K = 3
-MIN_RELEVANCE_SCORE = 0.20
+# Cosine-similarity cut-offs differ by retrieval mode: MiniLM embeddings give
+# higher scores for genuinely related text than sparse TF-IDF vectors do, so
+# one shared threshold would either admit noise or starve the offline fallback.
+MIN_RELEVANCE_SCORES = {
+    "semantic": 0.40,
+    "tfidf_fallback": 0.15,
+}
+NO_CONTEXT_MESSAGE = "No relevant knowledge-base context was found."
 MAX_WORDS = 180
 OVERLAP_WORDS = 30
 
@@ -166,6 +179,11 @@ def get_embedding_model():
     the model from being loaded repeatedly.
     """
 
+    if SentenceTransformer is None:
+        raise RuntimeError(
+            "Semantic RAG requires sentence-transformers. "
+            "Install project dependencies with: pip install -r requirements.txt"
+        )
     return SentenceTransformer(MODEL_NAME)
 
 
@@ -179,22 +197,33 @@ class LocalRAGRetriever:
 
         self.chunks = load_markdown_documents()
 
-        self.model = get_embedding_model()
-
+        self.model = None
         self.embeddings = None
+        self.vectorizer = None
+        self.tfidf_matrix = None
+        self.retrieval_mode = "unavailable"
 
-        if self.chunks:
+        if not self.chunks:
+            return
 
-            documents = [
-                chunk.text
-                for chunk in self.chunks
-            ]
-
+        documents = [chunk.text for chunk in self.chunks]
+        try:
+            self.model = get_embedding_model()
             self.embeddings = self.model.encode(
                 documents,
                 normalize_embeddings=True,
-                show_progress_bar=False
+                show_progress_bar=False,
             )
+            self.retrieval_mode = "semantic"
+        except Exception:
+            # Do not make Finance Chat unusable when model downloads are
+            # blocked, sentence-transformers is missing, or a model is offline.
+            self.vectorizer = TfidfVectorizer(
+                stop_words="english", ngram_range=(1, 2),
+                max_features=12000,
+            )
+            self.tfidf_matrix = self.vectorizer.fit_transform(documents)
+            self.retrieval_mode = "tfidf_fallback"
 
     # --------------------------------------------------------
     # Retrieve relevant chunks
@@ -212,27 +241,21 @@ class LocalRAGRetriever:
         if not query or not query.strip():
             return []
 
-        # Encode user query
-        query_embedding = self.model.encode(
-            query,
-            normalize_embeddings=True,
-            show_progress_bar=False
-        )
+        if self.embeddings is None and self.tfidf_matrix is None:
+            return []
 
-        query_embedding = np.asarray(
-            query_embedding
-        )
+        top_k = max(1, min(int(top_k), len(self.chunks)))
 
-        document_embeddings = np.asarray(
-            self.embeddings
-        )
-
-        # Because both query and documents are normalized,
-        # dot product is equivalent to cosine similarity.
-        scores = np.dot(
-            document_embeddings,
-            query_embedding
-        )
+        if self.retrieval_mode == "semantic":
+            query_embedding = self.model.encode(
+                query, normalize_embeddings=True, show_progress_bar=False
+            )
+            scores = np.dot(
+                np.asarray(self.embeddings), np.asarray(query_embedding)
+            )
+        else:
+            query_vector = self.vectorizer.transform([query])
+            scores = cosine_similarity(self.tfidf_matrix, query_vector).ravel()
 
         ranked_indices = np.argsort(
             scores
@@ -245,7 +268,7 @@ class LocalRAGRetriever:
             score = float(scores[index])
 
             # Ignore weak/unrelated matches
-            if score < MIN_RELEVANCE_SCORE:
+            if score < MIN_RELEVANCE_SCORES[self.retrieval_mode]:
                 continue
 
             chunk = self.chunks[index]
@@ -280,36 +303,28 @@ def get_retriever():
 # Public retrieve_context() function
 # ============================================================
 
-def retrieve_context(
-    query: str,
-    top_k: int = DEFAULT_TOP_K
-) -> str:
+def retrieve_chunks(query: str, top_k: int = DEFAULT_TOP_K):
+    """Return relevance-filtered chunks as structured dictionaries."""
+    return get_retriever().retrieve(query, top_k=top_k)
 
-    retriever = get_retriever()
 
-    results = retriever.retrieve(
-        query,
-        top_k=top_k
+def format_context(results) -> str:
+    """Render retrieved chunks as Markdown for display or LLM prompts."""
+    if not results:
+        return NO_CONTEXT_MESSAGE
+
+    return "\n\n---\n\n".join(
+        f"### {r['section']}\n"
+        f"**Source:** {r['source']}  \n"
+        f"**Relevance:** {r['score']:.3f}\n\n"
+        f"{r['text']}"
+        for r in results
     )
 
-    if not results:
 
-        return (
-            "No relevant knowledge-base context was found."
-        )
-
-    output = []
-
-    for result in results:
-
-        output.append(
-            f"### {result['section']}\n"
-            f"**Source:** {result['source']}  \n"
-            f"**Relevance:** {result['score']:.3f}\n\n"
-            f"{result['text']}"
-        )
-
-    return "\n\n---\n\n".join(output)
+def retrieve_context(query: str, top_k: int = DEFAULT_TOP_K) -> str:
+    """Retrieve and format knowledge-base context for ``query``."""
+    return format_context(retrieve_chunks(query, top_k=top_k))
 
 
 # ============================================================
@@ -319,7 +334,7 @@ def retrieve_context(
 if __name__ == "__main__":
 
     print("=" * 60)
-    print("FinanceAI Semantic RAG")
+    print("Finlytic AI Semantic RAG")
     print("=" * 60)
 
     chunks = load_markdown_documents()

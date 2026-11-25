@@ -2,6 +2,8 @@ import sqlite3
 import os
 import hashlib
 import secrets
+import hmac
+from pathlib import Path
 from datetime import datetime, timedelta
 
 
@@ -9,8 +11,18 @@ from datetime import datetime, timedelta
 # CONFIGURATION
 # ============================================================
 
-DATA_DIR = "data"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATA_DIR = os.getenv("FINLYTIC_DATA_DIR") or str(PROJECT_ROOT / "data")
 AUTH_DATABASE_PATH = os.path.join(DATA_DIR, "auth.db")
+
+# PBKDF2-HMAC-SHA256 work factor (OWASP 2023 guidance: >= 600,000).
+PBKDF2_ITERATIONS = 600_000
+# Hashes created before versioning used "salt:hash" with this work factor.
+LEGACY_PBKDF2_ITERATIONS = 100_000
+HASH_SCHEME = "pbkdf2_sha256"
+
+RESET_CODE_TTL_MINUTES = 10
+MAX_RESET_ATTEMPTS = 5
 
 
 # ============================================================
@@ -19,7 +31,7 @@ AUTH_DATABASE_PATH = os.path.join(DATA_DIR, "auth.db")
 
 def get_auth_connection():
     os.makedirs(DATA_DIR, exist_ok=True)
-    return sqlite3.connect(AUTH_DATABASE_PATH)
+    return sqlite3.connect(AUTH_DATABASE_PATH, timeout=30)
 
 
 # ============================================================
@@ -39,6 +51,7 @@ def init_auth_db():
             password_hash TEXT NOT NULL,
             reset_code TEXT,
             reset_code_expires TEXT,
+            reset_attempts INTEGER NOT NULL DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """
@@ -64,6 +77,13 @@ def init_auth_db():
         # Column already exists
         pass
 
+    try:
+        cursor.execute(
+            "ALTER TABLE users ADD COLUMN reset_attempts INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+
     connection.commit()
     connection.close()
 
@@ -72,54 +92,53 @@ def init_auth_db():
 # PASSWORD HASHING
 # ============================================================
 
-def hash_password(password):
-    """
-    Hash a password using PBKDF2-HMAC-SHA256
-    with a random salt.
-    """
+def hash_password(password, iterations=PBKDF2_ITERATIONS):
+    """Hash a password with PBKDF2-HMAC-SHA256 and a random 16-byte salt.
 
+    Format: ``pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>``. Storing the
+    work factor with the hash lets it be raised later without breaking
+    existing accounts.
+    """
     salt = secrets.token_bytes(16)
-
-    password_hash = hashlib.pbkdf2_hmac(
-        "sha256",
-        password.encode("utf-8"),
-        salt,
-        100_000,
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, iterations
     )
+    return f"{HASH_SCHEME}${iterations}${salt.hex()}${digest.hex()}"
 
+
+def _parse_hash(stored_password):
+    """Return (iterations, salt, digest) for current and legacy formats."""
+    if stored_password.startswith(HASH_SCHEME + "$"):
+        _, iterations, salt_hex, hash_hex = stored_password.split("$")
+        return int(iterations), bytes.fromhex(salt_hex), bytes.fromhex(hash_hex)
+    salt_hex, hash_hex = stored_password.split(":")
     return (
-        salt.hex()
-        + ":"
-        + password_hash.hex()
+        LEGACY_PBKDF2_ITERATIONS,
+        bytes.fromhex(salt_hex),
+        bytes.fromhex(hash_hex),
     )
 
 
 def verify_password(password, stored_password):
-    """
-    Verify a password against the stored
-    salt:hash format.
-    """
-
+    """Constant-time verification of current or legacy hash formats."""
     try:
-        salt_hex, hash_hex = stored_password.split(":")
-
-        salt = bytes.fromhex(salt_hex)
-        stored_hash = bytes.fromhex(hash_hex)
-
-        password_hash = hashlib.pbkdf2_hmac(
-            "sha256",
-            password.encode("utf-8"),
-            salt,
-            100_000,
+        iterations, salt, expected = _parse_hash(stored_password)
+        candidate = hashlib.pbkdf2_hmac(
+            "sha256", password.encode("utf-8"), salt, iterations
         )
-
-        return secrets.compare_digest(
-            password_hash,
-            stored_hash,
-        )
-
-    except (ValueError, TypeError):
+        return hmac.compare_digest(candidate, expected)
+    except (ValueError, TypeError, AttributeError):
         return False
+
+
+def needs_rehash(stored_password):
+    """True when a stored hash uses an older scheme or a lower work factor."""
+    try:
+        if not stored_password.startswith(HASH_SCHEME + "$"):
+            return True
+        return int(stored_password.split("$")[1]) < PBKDF2_ITERATIONS
+    except (ValueError, IndexError, AttributeError):
+        return True
 
 
 # ============================================================
@@ -132,10 +151,14 @@ def validate_email(email):
     if not email:
         return False
 
-    if "@" not in email:
+    if email.count("@") != 1 or any(char.isspace() for char in email):
         return False
 
-    if "." not in email.split("@")[-1]:
+    local, domain = email.split("@", 1)
+    if not local or "." not in domain:
+        return False
+
+    if domain.startswith(".") or domain.endswith(".") or ".." in domain:
         return False
 
     return True
@@ -282,6 +305,14 @@ def authenticate_user(email, password):
                 "message": "Invalid email or password.",
             }
 
+        if needs_rehash(stored_password):
+            # Transparently upgrade legacy / weaker hashes after a good login.
+            cursor.execute(
+                "UPDATE users SET password_hash = ? WHERE id = ?",
+                (hash_password(password), user_id),
+            )
+            connection.commit()
+
         return {
             "success": True,
             "user_id": user_id,
@@ -367,6 +398,15 @@ def email_exists(email):
 
 
 # ============================================================
+# PASSWORD RESET CODES
+# ============================================================
+
+def _hash_reset_code(email, code):
+    """Hash a reset code so a leaked auth.db does not expose live codes."""
+    return hashlib.sha256(f"{email}:{code}".encode("utf-8")).hexdigest()
+
+
+# ============================================================
 # CREATE PASSWORD RESET CODE
 # ============================================================
 
@@ -418,7 +458,7 @@ def create_password_reset_code(email):
         # Code valid for 10 minutes
         expires_at = (
             datetime.now()
-            + timedelta(minutes=10)
+            + timedelta(minutes=RESET_CODE_TTL_MINUTES)
         ).isoformat()
 
         cursor.execute(
@@ -426,11 +466,12 @@ def create_password_reset_code(email):
             UPDATE users
             SET
                 reset_code = ?,
-                reset_code_expires = ?
+                reset_code_expires = ?,
+                reset_attempts = 0
             WHERE email = ?
             """,
             (
-                reset_code,
+                _hash_reset_code(email, reset_code),
                 expires_at,
                 email,
             ),
@@ -488,7 +529,8 @@ def reset_password(
             """
             SELECT
                 reset_code,
-                reset_code_expires
+                reset_code_expires,
+                reset_attempts
             FROM users
             WHERE email = ?
             """,
@@ -515,9 +557,29 @@ def reset_password(
                 "No active reset code found.",
             )
 
-        # Check code matches
-        if stored_code != reset_code:
+        attempts = user[2] or 0
+        if attempts >= MAX_RESET_ATTEMPTS:
+            cursor.execute(
+                "UPDATE users SET reset_code = NULL, reset_code_expires = NULL "
+                "WHERE email = ?",
+                (email,),
+            )
+            connection.commit()
+            return (
+                False,
+                "Too many incorrect attempts. Request a new reset code.",
+            )
 
+        # Check code matches (constant-time comparison of hashes)
+        if not hmac.compare_digest(
+            stored_code, _hash_reset_code(email, reset_code)
+        ):
+            cursor.execute(
+                "UPDATE users SET reset_attempts = reset_attempts + 1 "
+                "WHERE email = ?",
+                (email,),
+            )
+            connection.commit()
             return (
                 False,
                 "Invalid reset code.",
@@ -564,7 +626,8 @@ def reset_password(
             SET
                 password_hash = ?,
                 reset_code = NULL,
-                reset_code_expires = NULL
+                reset_code_expires = NULL,
+                reset_attempts = 0
             WHERE email = ?
             """,
             (

@@ -1,53 +1,55 @@
 import sqlite3
 import csv
 import os
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from contextvars import ContextVar
 
 
 # ============================================================
 # PATHS
 # ============================================================
 
-DATA_DIR = "data"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# Seed files shipped with the repository.
+SEED_DIR = PROJECT_ROOT / "data"
+
+# Writable runtime data (auth.db, per-user databases). Override with
+# FINLYTIC_DATA_DIR to point at a persistent volume when deploying.
+DATA_DIR = os.getenv("FINLYTIC_DATA_DIR") or str(SEED_DIR)
 USERS_DIR = os.path.join(DATA_DIR, "users")
 
-LEGACY_DATABASE_PATH = os.path.join(DATA_DIR, "finance.db")
-
-TRANSACTIONS_CSV = os.path.join(DATA_DIR, "transactions.csv")
-BUDGETS_CSV = os.path.join(DATA_DIR, "budgets.csv")
+TRANSACTIONS_CSV = str(SEED_DIR / "transactions.csv")
+BUDGETS_CSV = str(SEED_DIR / "budgets.csv")
 
 
 # ============================================================
 # CURRENT USER CONTEXT
 # ============================================================
 
-_CURRENT_USER_ID = None
+_CURRENT_USER_ID = ContextVar("finlytic_current_user_id", default=None)
 
 
 def set_current_user(user_id):
     """
     Set the authenticated user for the current application session.
     """
-    global _CURRENT_USER_ID
-
     if user_id is None:
         raise ValueError("user_id cannot be None.")
 
-    _CURRENT_USER_ID = int(user_id)
+    _CURRENT_USER_ID.set(int(user_id))
 
 
 def clear_current_user():
-    """
-    Clear the currently authenticated user.
-    """
-    global _CURRENT_USER_ID
-    _CURRENT_USER_ID = None
+    """Clear the authenticated user in the current execution context."""
+    _CURRENT_USER_ID.set(None)
 
 
 def get_current_user_id():
     """
     Return the currently authenticated user ID.
     """
-    return _CURRENT_USER_ID
+    return _CURRENT_USER_ID.get()
 
 
 # ============================================================
@@ -81,7 +83,7 @@ def get_user_connection(user_id):
     """
     db_path = get_user_db_path(user_id)
 
-    connection = sqlite3.connect(db_path)
+    connection = sqlite3.connect(db_path, timeout=30)
 
     return connection
 
@@ -97,13 +99,14 @@ def get_connection():
     All application modules should use this function.
     """
 
-    if _CURRENT_USER_ID is None:
+    user_id = _CURRENT_USER_ID.get()
+    if user_id is None:
         raise RuntimeError(
             "No authenticated user is set. "
             "Call set_current_user(user_id) after login."
         )
 
-    return get_user_connection(_CURRENT_USER_ID)
+    return get_user_connection(user_id)
 
 
 # ============================================================
@@ -156,115 +159,107 @@ def create_tables(user_id):
 # DEMO DATA
 # ============================================================
 
+def _rebase_demo_dates(records, today=None):
+    """Shift bundled demo transactions so the newest one is dated today.
+
+    The demo CSV is a fixed snapshot. Without this, every new demo account
+    would open to a stale dataset (empty "current month", forecast warnings).
+    The shift is applied once, when a brand-new account is seeded, and is
+    never applied to data a user entered themselves.
+    """
+    if not records:
+        return records
+    try:
+        parsed = [datetime.strptime(r[0], "%Y-%m-%d").date() for r in records]
+    except ValueError:
+        return records  # unexpected format: keep the data exactly as provided
+    shift = timedelta(days=((today or date.today()) - max(parsed)).days)
+    return [
+        ((d + shift).isoformat(),) + tuple(r[1:])
+        for d, r in zip(parsed, records)
+    ]
+
+
+
 def load_demo_data(user_id):
+    """Import bundled demo CSV data at most once for a new user database.
+
+    The marker is stored even when no CSV data is present. This prevents an
+    intentionally emptied account from being silently repopulated on a later
+    application rerun.
+    """
     connection = get_user_connection(user_id)
+    try:
+        cursor = connection.cursor()
+        cursor.execute(
+            "SELECT 1 FROM app_meta WHERE key = ?",
+            ("demo_data_initialized_v1",),
+        )
+        if cursor.fetchone():
+            return
 
-    cursor = connection.cursor()
-
-    # --------------------------------------------------------
-    # TRANSACTIONS
-    # --------------------------------------------------------
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM transactions"
-    )
-
-    transaction_count = cursor.fetchone()[0]
-
-    if (
-        transaction_count == 0
-        and os.path.exists(TRANSACTIONS_CSV)
-    ):
-        with open(
-            TRANSACTIONS_CSV,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            reader = csv.DictReader(file)
-
-            records = []
-
-            for row in reader:
-
-                records.append(
-                    (
-                        row["date"],
+        cursor.execute("SELECT COUNT(*) FROM transactions")
+        transaction_count = cursor.fetchone()[0]
+        if transaction_count == 0 and os.path.exists(TRANSACTIONS_CSV):
+            with open(TRANSACTIONS_CSV, "r", encoding="utf-8-sig", newline="") as file:
+                reader = csv.DictReader(file)
+                records = []
+                for row in reader:
+                    try:
+                        amount = float(row["amount"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if amount < 0 or not row.get("date") or not row.get("type") or not row.get("category"):
+                        continue
+                    records.append((
+                        row["date"].strip(),
                         row["type"],
                         row["category"],
-                        row["description"],
-                        float(row["amount"]),
-                        row["payment_method"],
+                        row.get("description", ""),
+                        amount,
+                        row.get("payment_method", ""),
+                    ))
+                records = _rebase_demo_dates(records)
+                if records:
+                    cursor.executemany(
+                        """
+                        INSERT INTO transactions
+                        (date, type, category, description, amount, payment_method)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        records,
                     )
-                )
 
-        if records:
-
-            cursor.executemany(
-                """
-                INSERT INTO transactions
-                (
-                    date,
-                    type,
-                    category,
-                    description,
-                    amount,
-                    payment_method
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                records
-            )
-
-    # --------------------------------------------------------
-    # BUDGETS
-    # --------------------------------------------------------
-
-    cursor.execute(
-        "SELECT COUNT(*) FROM budgets"
-    )
-
-    budget_count = cursor.fetchone()[0]
-
-    if (
-        budget_count == 0
-        and os.path.exists(BUDGETS_CSV)
-    ):
-        with open(
-            BUDGETS_CSV,
-            "r",
-            encoding="utf-8"
-        ) as file:
-
-            reader = csv.DictReader(file)
-
-            records = []
-
-            for row in reader:
-
-                records.append(
-                    (
-                        row["category"],
-                        float(row["budget"])
+        cursor.execute("SELECT COUNT(*) FROM budgets")
+        budget_count = cursor.fetchone()[0]
+        if budget_count == 0 and os.path.exists(BUDGETS_CSV):
+            with open(BUDGETS_CSV, "r", encoding="utf-8-sig", newline="") as file:
+                reader = csv.DictReader(file)
+                records = []
+                for row in reader:
+                    try:
+                        budget = float(row["budget"])
+                    except (KeyError, TypeError, ValueError):
+                        continue
+                    if budget < 0 or not row.get("category"):
+                        continue
+                    records.append((row["category"], budget))
+                if records:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO budgets (category, budget) VALUES (?, ?)",
+                        records,
                     )
-                )
 
-        if records:
-
-            cursor.executemany(
-                """
-                INSERT OR IGNORE INTO budgets
-                (
-                    category,
-                    budget
-                )
-                VALUES (?, ?)
-                """,
-                records
-            )
-
-    connection.commit()
-    connection.close()
+        cursor.execute(
+            "INSERT INTO app_meta (key, value) VALUES (?, ?)",
+            ("demo_data_initialized_v1", "1"),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 # ============================================================
@@ -314,95 +309,3 @@ def delete_user_database(user_id):
 
     if os.path.exists(db_path):
         os.remove(db_path)
-
-
-# ============================================================
-# LEGACY DATABASE
-# ============================================================
-
-def create_legacy_tables():
-
-    ensure_data_directories()
-
-    connection = sqlite3.connect(
-        LEGACY_DATABASE_PATH
-    )
-
-    cursor = connection.cursor()
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT NOT NULL,
-            type TEXT NOT NULL,
-            category TEXT NOT NULL,
-            description TEXT,
-            amount REAL NOT NULL,
-            payment_method TEXT
-        )
-        """
-    )
-
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS budgets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT UNIQUE NOT NULL,
-            budget REAL NOT NULL
-        )
-        """
-    )
-
-    connection.commit()
-    connection.close()
-
-
-def get_legacy_data_counts():
-
-    create_legacy_tables()
-
-    connection = sqlite3.connect(
-        LEGACY_DATABASE_PATH
-    )
-
-    cursor = connection.cursor()
-
-    transaction_count = cursor.execute(
-        "SELECT COUNT(*) FROM transactions"
-    ).fetchone()[0]
-
-    budget_count = cursor.execute(
-        "SELECT COUNT(*) FROM budgets"
-    ).fetchone()[0]
-
-    connection.close()
-
-    return {
-        "transactions": transaction_count,
-        "budgets": budget_count,
-    }
-
-
-def initialize_database():
-    """
-    Compatibility function for the old finance.db.
-
-    The authenticated application should use
-    initialize_user_database(user_id) instead.
-    """
-
-    create_legacy_tables()
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-if __name__ == "__main__":
-
-    initialize_database()
-
-    print(
-        "✅ Legacy database ready!"
-    )

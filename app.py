@@ -1,13 +1,22 @@
+import html
+
 import streamlit as st
 import pandas as pd
 from src.database import (
-    get_user_connection,
     initialize_user_database,
     set_current_user,
     clear_current_user,
 )
+from src.repository import (
+    get_transactions,
+    get_budgets,
+    add_transaction,
+    update_transaction,
+    delete_transaction,
+)
 from src.finance_chat import answer_question as module_answer_question
 from src.llm_client import answer_with_llm
+from src.config import SHOW_RESET_CODE
 from src.auth import (
     init_auth_db,
     register_user,
@@ -21,577 +30,20 @@ from src.auth import (
 # ============================================================
 
 st.set_page_config(
-    page_title="FinanceAI",
+    page_title="Finlytic AI",
     page_icon="💰",
     layout="wide",
 )
 
 
 # ============================================================
-# CUSTOM CSS
+# THEME
+# ============================================================
 
-st.markdown(
-    """
-<style>
-/* ============================================================
-   FINANCEAI — GLOBAL FINTECH THEME
-   Visual-only layer: CRUD, analytics, ML and database logic
-   remain unchanged.
-   ============================================================ */
+from pathlib import Path
 
-:root {
-    --bg: #0B1220;
-    --bg-soft: #0E1728;
-    --surface: #111827;
-    --surface-2: #162033;
-    --border: #1F2937;
-    --border-soft: #253247;
-    --primary: #10B981;
-    --primary-soft: #0D3B2C;
-    --blue: #3B82F6;
-    --purple: #8B5CF6;
-    --orange: #F59E0B;
-    --danger: #EF4444;
-    --text: #F9FAFB;
-    --muted: #9CA3AF;
-}
-
-/* App background */
-.stApp {
-    background:
-        radial-gradient(circle at 85% 0%, rgba(56,189,248,.08), transparent 28%),
-        radial-gradient(circle at 15% 10%, rgba(34,197,94,.06), transparent 25%),
-        var(--bg) !important;
-    color: var(--text) !important;
-}
-
-/* Main content width and spacing */
-.main .block-container {
-    max-width: 1320px;
-    padding-top: 2.2rem;
-    padding-bottom: 4rem;
-    padding-left: 2rem;
-    padding-right: 2rem;
-}
-
-/* Typography */
-.stApp h1, .stApp h2, .stApp h3, .stApp h4 {
-    color: var(--text) !important;
-    letter-spacing: -0.02em;
-}
-
-.stApp h1 {
-    font-weight: 800 !important;
-}
-
-.stApp p, .stApp label, .stApp li {
-    color: #d7e0eb;
-}
-
-.stCaption, [data-testid="stCaptionContainer"] {
-    color: var(--muted) !important;
-}
-
-/* Sidebar */
-section[data-testid="stSidebar"] {
-    background: linear-gradient(180deg, #0B1220 0%, #0D1727 55%, #0F2030 100%) !important;
-    border-right: 1px solid var(--border);
-}
-
-section[data-testid="stSidebar"] > div {
-    padding-top: 1.25rem;
-}
-
-section[data-testid="stSidebar"] * {
-    color: #f8fafc !important;
-}
-
-.finance-brand {
-    padding: 8px 4px 18px 4px;
-}
-
-.finance-brand-title {
-    font-size: 22px;
-    font-weight: 800;
-    letter-spacing: -0.03em;
-}
-
-.finance-brand-title span {
-    color: var(--primary);
-}
-
-.finance-brand-subtitle {
-    color: var(--muted) !important;
-    font-size: 12px;
-    margin-top: 4px;
-}
-
-.sidebar-section {
-    color: #64748b !important;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .12em;
-    margin: 8px 0 8px;
-}
-
-/* Radio navigation — pill-style active item */
-section[data-testid="stSidebar"] [data-testid="stRadio"] > div {
-    gap: 4px;
-}
-
-section[data-testid="stSidebar"] [data-testid="stRadio"] label {
-    border-radius: 11px;
-    padding: 8px 10px !important;
-    margin: 1px 0 !important;
-    transition: all .16s ease;
-    border: 1px solid transparent;
-    background: transparent;
-}
-
-section[data-testid="stSidebar"] [data-testid="stRadio"] label:hover {
-    background: rgba(59,130,246,.09) !important;
-    border-color: rgba(59,130,246,.14);
-}
-
-section[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
-    background: linear-gradient(90deg, rgba(16,185,129,.20), rgba(16,185,129,.07)) !important;
-    border-color: rgba(16,185,129,.32) !important;
-    box-shadow: inset 3px 0 0 #10B981, 0 5px 18px rgba(16,185,129,.07);
-}
-
-section[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) p,
-section[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) span {
-    color: #F9FAFB !important;
-    font-weight: 750 !important;
-}
-
-section[data-testid="stSidebar"] [data-testid="stRadio"] label p {
-    font-size: 14px !important;
-}
-
-/* Hero */
-.hero {
-    background:
-        radial-gradient(circle at 88% 18%, rgba(59,130,246,.22), transparent 30%),
-        radial-gradient(circle at 72% 90%, rgba(16,185,129,.16), transparent 32%),
-        linear-gradient(135deg, #122033 0%, #12394A 100%);
-    padding: 32px 34px;
-    border-radius: 22px;
-    margin-bottom: 26px;
-    border: 1px solid #24506A;
-    box-shadow: 0 18px 50px rgba(0,0,0,.25);
-    position: relative;
-    overflow: hidden;
-}
-
-.hero::after {
-    content: "";
-    position: absolute;
-    width: 180px;
-    height: 180px;
-    right: -60px;
-    top: -70px;
-    border-radius: 50%;
-    background: rgba(16,185,129,.11);
-}
-
-.hero h1 {
-    margin: 0;
-    color: #fff !important;
-    font-size: 32px;
-    font-weight: 800;
-}
-
-.hero p {
-    margin: 8px 0 0;
-    color: #c8dce8 !important;
-    font-size: 15px;
-}
-
-/* KPI cards */
-.kpi-card {
-    background: linear-gradient(145deg, #111827 0%, #0F1929 100%);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 18px 20px;
-    min-height: 112px;
-    box-shadow: 0 10px 28px rgba(0,0,0,.18);
-    transition: transform .16s ease, border-color .16s ease, box-shadow .16s ease;
-    position: relative;
-    overflow: hidden;
-}
-
-.kpi-card::before {
-    content: "";
-    position: absolute;
-    left: 0;
-    top: 0;
-    bottom: 0;
-    width: 4px;
-    background: var(--primary);
-}
-
-.kpi-card.blue::before { background: #3B82F6; }
-.kpi-card.purple::before { background: #8B5CF6; }
-.kpi-card.red::before { background: #EF4444; }
-
-.kpi-card:hover {
-    transform: translateY(-2px);
-    border-color: #334155;
-    box-shadow: 0 14px 32px rgba(0,0,0,.24);
-}
-
-.kpi-label {
-    color: #9CA3AF !important;
-    font-size: 11px;
-    font-weight: 800;
-    letter-spacing: .08em;
-}
-
-.kpi-value {
-    color: #F9FAFB !important;
-    font-size: 27px;
-    font-weight: 800;
-    margin-top: 8px;
-    letter-spacing: -.025em;
-}
-
-.kpi-income .kpi-label { color: #6EE7B7 !important; }
-.kpi-expense .kpi-label { color: #FCA5A5 !important; }
-.kpi-saving .kpi-label { color: #93C5FD !important; }
-.kpi-rate .kpi-label { color: #C4B5FD !important; }
-
-/* Streamlit metric cards */
-[data-testid="stMetric"] {
-    background: linear-gradient(145deg, #111f32, #0f1a2b);
-    border: 1px solid var(--border);
-    border-radius: 15px;
-    padding: 16px;
-    box-shadow: 0 6px 20px rgba(0,0,0,.16);
-}
-
-[data-testid="stMetricLabel"] {
-    color: var(--muted) !important;
-}
-
-[data-testid="stMetricValue"] {
-    color: var(--text) !important;
-}
-
-[data-testid="stMetricDelta"] {
-    color: #86efac !important;
-}
-
-/* Buttons */
-.stButton > button {
-    background: linear-gradient(135deg, #16a34a, #22c55e) !important;
-    color: #03140a !important;
-    border: 1px solid #4ade80 !important;
-    border-radius: 10px;
-    font-weight: 750;
-    min-height: 40px;
-    box-shadow: 0 6px 18px rgba(34,197,94,.12);
-    transition: transform .12s ease, box-shadow .12s ease;
-}
-
-.stButton > button:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 9px 22px rgba(34,197,94,.20);
-}
-
-/* Inputs */
-.stTextInput input,
-.stNumberInput input,
-.stDateInput input,
-.stTextArea textarea {
-    background: #0e1929 !important;
-    color: var(--text) !important;
-    border: 1px solid #2b405d !important;
-    border-radius: 10px !important;
-}
-
-.stTextInput input:focus,
-.stNumberInput input:focus,
-.stDateInput input:focus,
-.stTextArea textarea:focus {
-    border-color: #38bdf8 !important;
-    box-shadow: 0 0 0 1px rgba(56,189,248,.25) !important;
-}
-
-div[data-baseweb="select"] > div {
-    background: #0e1929 !important;
-    color: var(--text) !important;
-    border-color: #2b405d !important;
-    border-radius: 10px !important;
-}
-
-/* Tabs */
-button[data-baseweb="tab"] {
-    color: #94a3b8 !important;
-}
-
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: #f8fafc !important;
-}
-
-/* Tables */
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--border);
-    border-radius: 13px;
-    overflow: hidden;
-    background: #0e1929;
-}
-
-/* Expanders */
-details {
-    background: #0e1929 !important;
-    border: 1px solid var(--border) !important;
-    border-radius: 12px !important;
-}
-
-/* Alerts */
-div[data-testid="stAlert"] {
-    border-radius: 12px;
-}
-
-/* Chat */
-.chat-shell {
-    background: linear-gradient(145deg, #0b1628, #0e1b2e);
-    border: 1px solid #243a52;
-    border-radius: 20px;
-    padding: 18px;
-    margin-bottom: 18px;
-    box-shadow: 0 12px 30px rgba(0,0,0,.18);
-}
-
-.chat-intro {
-    background: linear-gradient(135deg, #10253b, #123c52);
-    border: 1px solid #24506A;
-    border-radius: 16px;
-    padding: 20px 22px;
-}
-
-.chat-intro-title {
-    color: #fff;
-    font-size: 22px;
-    font-weight: 800;
-    margin-bottom: 5px;
-}
-
-.chat-intro-text {
-    color: #bfd8e5;
-    font-size: 14px;
-}
-
-.chat-status {
-    display: inline-block;
-    margin-top: 10px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    background: #123c2a;
-    border: 1px solid #2f9e5b;
-    color: #bbf7d0;
-    font-size: 11px;
-    font-weight: 750;
-}
-
-.suggestion {
-    background: #111f32;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 12px 14px;
-    color: #cbd5e1;
-    font-size: 13px;
-    margin-bottom: 8px;
-}
-
-[data-testid="stChatMessage"] {
-    border: 1px solid #253b53;
-    border-radius: 16px;
-    padding: 13px 16px;
-    margin-bottom: 12px;
-    background: #111f32;
-    box-shadow: 0 6px 18px rgba(0,0,0,.10);
-}
-
-[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarUser"] {
-    background: rgba(59,130,246,.18);
-}
-
-[data-testid="stChatMessage"] [data-testid="stChatMessageAvatarAssistant"] {
-    background: rgba(139,92,246,.18);
-}
-
-[data-testid="stChatInput"] {
-    margin-top: 10px;
-}
-
-[data-testid="stChatInput"] textarea {
-    background: #0f1a2b !important;
-    color: #F8FAFC !important;
-    border: 1px solid #334A63 !important;
-    border-radius: 14px !important;
-}
-
-[data-testid="stChatMessageContent"] {
-    color: #e5e7eb !important;
-}
-
-.chat-empty {
-    text-align: center;
-    padding: 35px 20px;
-    color: var(--muted);
-}
-
-.chat-empty-icon {
-    font-size: 38px;
-    margin-bottom: 8px;
-}
-
-/* Divider + utility chrome */
-hr {
-    border-color: var(--border-soft) !important;
-}
-
-#MainMenu { visibility: hidden; }
-footer { visibility: hidden; }
-
-/* Scrollbar */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: #07111f; }
-::-webkit-scrollbar-thumb { background: #263c57; border-radius: 999px; }
-::-webkit-scrollbar-thumb:hover { background: #365574; }
-
-/* Small-screen spacing */
-@media (max-width: 800px) {
-    .main .block-container {
-        padding-left: 1rem;
-        padding-right: 1rem;
-        padding-top: 1.2rem;
-    }
-    .hero {
-        padding: 24px 22px;
-    }
-    .hero h1 {
-        font-size: 27px;
-    }
-}
-
-/* Transaction UI */
-.transaction-summary {
-    background: linear-gradient(145deg, #111827, #0f1929);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px 18px;
-    min-height: 92px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.16);
-}
-.transaction-summary .label {
-    color: var(--muted);
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-}
-.transaction-summary .value {
-    color: var(--text);
-    font-size: 23px;
-    font-weight: 800;
-    margin-top: 7px;
-}
-.transaction-summary.green { border-top: 3px solid #10B981; }
-.transaction-summary.red { border-top: 3px solid #EF4444; }
-.transaction-summary.blue { border-top: 3px solid #3B82F6; }
-.transaction-summary.purple { border-top: 3px solid #8B5CF6; }
-
-.transaction-toolbar {
-    background: #0f1a2b;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 16px 18px 4px;
-    margin: 6px 0 18px;
-}
-
-.transaction-panel {
-    background: linear-gradient(145deg, #111827, #0e1929);
-    border: 1px solid var(--border);
-    border-radius: 18px;
-    padding: 20px;
-    margin: 12px 0 20px;
-    box-shadow: 0 10px 28px rgba(0,0,0,.15);
-}
-
-.transaction-badge {
-    display: inline-block;
-    padding: 4px 9px;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 800;
-    letter-spacing: .04em;
-}
-.transaction-badge.income { background: rgba(16,185,129,.14); color: #6EE7B7; border: 1px solid rgba(16,185,129,.28); }
-.transaction-badge.expense { background: rgba(239,68,68,.14); color: #FCA5A5; border: 1px solid rgba(239,68,68,.28); }
-
-/* Make secondary form buttons visually distinct */
-button[kind="secondary"] {
-    background: #172235 !important;
-    color: #E2E8F0 !important;
-    border: 1px solid #334155 !important;
-    box-shadow: none !important;
-}
-button[kind="secondary"]:hover {
-    border-color: #38BDF8 !important;
-    color: #F8FAFC !important;
-}
-
-
-/* AI Advisor */
-.advisor-card { background: linear-gradient(145deg, #111827, #0E1929); border:1px solid var(--border); border-radius:18px; padding:20px; min-height:150px; box-shadow:0 10px 28px rgba(0,0,0,.16); }
-.advisor-card .icon { font-size:28px; margin-bottom:10px; }
-.advisor-card .label { color:var(--muted); font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
-.advisor-card .value { color:var(--text); font-size:25px; font-weight:850; margin-top:7px; }
-.advisor-card .desc { color:#CBD5E1; font-size:12px; line-height:1.5; margin-top:6px; }
-.advisor-card.green { border-top:3px solid #10B981; }
-.advisor-card.red { border-top:3px solid #EF4444; }
-.advisor-card.blue { border-top:3px solid #3B82F6; }
-.advisor-card.purple { border-top:3px solid #8B5CF6; }
-.recommendation { background:#101C2D; border:1px solid #26374D; border-radius:16px; padding:16px 18px; margin:10px 0; }
-.recommendation .title { color:#F8FAFC; font-weight:800; font-size:14px; }
-.recommendation .body { color:#AFC0D2; font-size:12px; line-height:1.6; margin-top:5px; }
-.advisor-banner { background:linear-gradient(135deg, rgba(139,92,246,.16), rgba(59,130,246,.10)); border:1px solid rgba(139,92,246,.30); border-radius:18px; padding:18px 20px; margin:8px 0 18px; }
-.advisor-banner .title { font-size:16px; font-weight:800; color:#F8FAFC; }
-.advisor-banner .text { color:#B8C7D8; font-size:12px; margin-top:4px; }
-
-
-/* Anomaly Detection */
-.advisor-banner {
-    border-radius: 16px;
-    padding: 16px 20px;
-    margin: 6px 0 24px;
-    border: 1px solid var(--border);
-    background: linear-gradient(145deg, #111827, #0f1929);
-}
-.advisor-banner.success { border-left: 4px solid #10B981; }
-.advisor-banner.danger { border-left: 4px solid #EF4444; }
-.banner-title { color: var(--text); font-weight: 800; font-size: 15px; }
-.banner-text { color: var(--muted); font-size: 12px; margin-top: 5px; }
-.method-card, .info-card {
-    background: linear-gradient(145deg, #111827, #0e1929);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 18px;
-    margin-bottom: 14px;
-}
-.method-row { display:flex; justify-content:space-between; gap:15px; padding:9px 0; border-bottom:1px solid #1f2937; color:#9CA3AF; font-size:12px; }
-.method-row:last-child { border-bottom:0; }
-.method-row strong { color:#F9FAFB; }
-.info-card { border-left:4px solid #3B82F6; }
-
-</style>
-""",
-    unsafe_allow_html=True,
-)
-
+_STYLES = Path(__file__).parent / "assets" / "styles.css"
+st.markdown(f"<style>{_STYLES.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
 # ============================================================
@@ -616,7 +68,7 @@ def show_authentication():
         <div style="max-width:620px;margin:50px auto 25px;text-align:center;">
             <div style="font-size:42px;">💰</div>
             <h1 style="margin-bottom:5px;">
-                Finance<span style="color:#10B981;">AI</span>
+                Finlytic<span style="color:#10B981;">AI</span>
             </h1>
             <p style="color:#9CA3AF;">Personal Finance Command Center</p>
         </div>
@@ -633,7 +85,7 @@ def show_authentication():
         with st.form("login_form"):
             email = st.text_input("Email", placeholder="you@example.com")
             password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("🔐 Login", use_container_width=True)
+            submitted = st.form_submit_button("🔐 Login", width="stretch")
 
         if submitted:
             if not email.strip() or not password:
@@ -653,13 +105,13 @@ def show_authentication():
                     st.error(result.get("message", "Invalid email or password."))
 
     with register_tab:
-        st.markdown("### Create your FinanceAI account")
+        st.markdown("### Create your Finlytic AI account")
         with st.form("register_form"):
             name = st.text_input("Full name", placeholder="Your name")
             email = st.text_input("Email address", placeholder="you@example.com", key="register_email")
             password = st.text_input("Password", type="password", key="register_password")
             confirm_password = st.text_input("Confirm password", type="password")
-            submitted = st.form_submit_button("📝 Create Account", use_container_width=True)
+            submitted = st.form_submit_button("📝 Create Account", width="stretch")
 
         if submitted:
             if password != confirm_password:
@@ -685,7 +137,7 @@ def show_authentication():
         if st.button(
             "📩 Generate Reset Code",
             key="generate_reset_code",
-            use_container_width=True,
+            width="stretch",
         ):
             success, message, reset_code = create_password_reset_code(reset_email)
 
@@ -694,7 +146,12 @@ def show_authentication():
                 st.session_state.reset_code_generated = True
                 st.session_state.dev_reset_code = reset_code
                 st.success("Reset code generated successfully.")
-                st.warning(f"🔐 Development Reset Code: {reset_code}")
+                if SHOW_RESET_CODE:
+                    # No email service is wired up, so demo mode shows the code
+                    # on screen. Set FINLYTIC_SHOW_RESET_CODE=false in production.
+                    st.warning(f"🔐 Demo-mode reset code: {reset_code}")
+                else:
+                    st.info("If the account exists, a reset code has been sent.")
             else:
                 st.error(message)
 
@@ -721,7 +178,7 @@ def show_authentication():
             if st.button(
                 "🔐 Reset Password",
                 key="reset_password_button",
-                use_container_width=True,
+                width="stretch",
                 type="primary",
             ):
                 if not entered_code:
@@ -783,378 +240,9 @@ from src.anomaly_detection import get_anomalies
 CURRENT_USER_ID = int(st.session_state.user_id)
 set_current_user(CURRENT_USER_ID)
 
-def get_connection():
-    return get_user_connection(CURRENT_USER_ID)
-
 initialize_user_database(CURRENT_USER_ID, load_demo=True)
 
 
-
-def rebalance_demo_expenses_once():
-    """One-time demo-data adjustment so recorded expenses are below income.
-
-    This preserves every transaction, category, date, description and payment method;
-    it only scales existing expense amounts so the current demo totals produce a
-    positive savings position. A database marker prevents the adjustment from
-    running again on every Streamlit rerun.
-    """
-    target_expenses = 102714.10
-    connection = get_connection()
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-
-        already_done = connection.execute(
-            "SELECT value FROM app_meta WHERE key = ?",
-            ("positive_demo_expenses_v1",),
-        ).fetchone()
-
-        if already_done:
-            return
-
-        current_total = connection.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE LOWER(type) = 'expense'"
-        ).fetchone()[0]
-
-        if current_total <= target_expenses:
-            connection.execute(
-                "INSERT INTO app_meta (key, value) VALUES (?, ?)",
-                ("positive_demo_expenses_v1", "not_needed"),
-            )
-            connection.commit()
-            return
-
-        factor = target_expenses / float(current_total)
-        connection.execute(
-            """
-            UPDATE transactions
-            SET amount = ROUND(amount * ?, 2)
-            WHERE LOWER(type) = 'expense'
-            """,
-            (factor,),
-        )
-
-        # Correct rounding drift so the total is exactly the target amount.
-        new_total = connection.execute(
-            "SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE LOWER(type) = 'expense'"
-        ).fetchone()[0]
-        difference = round(target_expenses - float(new_total), 2)
-
-        if difference != 0:
-            last_expense = connection.execute(
-                """
-                SELECT id FROM transactions
-                WHERE LOWER(type) = 'expense'
-                ORDER BY id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-            if last_expense:
-                connection.execute(
-                    "UPDATE transactions SET amount = ROUND(amount + ?, 2) WHERE id = ?",
-                    (difference, last_expense[0]),
-                )
-
-        connection.execute(
-            "INSERT INTO app_meta (key, value) VALUES (?, ?)",
-            ("positive_demo_expenses_v1", f"adjusted_to_{target_expenses:.2f}"),
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-rebalance_demo_expenses_once()
-
-
-def distribute_demo_income_across_months_once():
-    """Spread the existing demo income across May-September 2026 once.
-
-    The total income is preserved; only the timing and descriptions of the
-    demo income records are changed so monthly analysis shows income in each
-    month from May through September.
-    """
-    connection = get_connection()
-    marker_key = "demo_income_may_sep_v1"
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS app_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-
-        if connection.execute(
-            "SELECT 1 FROM app_meta WHERE key = ?", (marker_key,)
-        ).fetchone():
-            return
-
-        rows = connection.execute(
-            "SELECT id, date, amount FROM transactions WHERE LOWER(type) = 'income' ORDER BY id"
-        ).fetchall()
-
-        if not rows:
-            return
-
-        total_income = round(sum(float(row[2]) for row in rows), 2)
-        if total_income <= 0:
-            return
-
-        # Preserve the current total income exactly while distributing it.
-        target_amounts = [20000.00, 23000.00, 25000.00, 32000.00, 30000.00]
-        target_total = round(sum(target_amounts), 2)
-        scale = total_income / target_total
-        target_amounts = [round(value * scale, 2) for value in target_amounts]
-        target_amounts[-1] = round(total_income - sum(target_amounts[:-1]), 2)
-
-        months = [
-            ("2026-05-15", "May Salary"),
-            ("2026-06-15", "June Salary"),
-            ("2026-07-15", "July Salary"),
-            ("2026-08-15", "August Salary"),
-            ("2026-09-15", "September Salary"),
-        ]
-
-        # Use the first existing income row for May and remove the remaining
-        # income rows; then create the five monthly demo income records.
-        connection.execute(
-            "DELETE FROM transactions WHERE LOWER(type) = 'income'"
-        )
-
-        for (date_value, description), amount in zip(months, target_amounts):
-            connection.execute(
-                """
-                INSERT INTO transactions
-                (date, type, category, description, amount, payment_method)
-                VALUES (?, 'Income', 'Salary', ?, ?, 'Bank Transfer')
-                """,
-                (date_value, description, amount),
-            )
-
-        connection.execute(
-            "INSERT INTO app_meta (key, value) VALUES (?, ?)",
-            (marker_key, f"distributed_total_{total_income:.2f}"),
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-distribute_demo_income_across_months_once()
-
-# ============================================================
-# DATABASE HELPERS
-# ============================================================
-
-def get_transactions():
-    connection = get_connection()
-
-    query = """
-        SELECT
-            id,
-            date,
-            type,
-            category,
-            description,
-            amount,
-            payment_method
-        FROM transactions
-        ORDER BY date DESC, id DESC
-    """
-
-    try:
-        return pd.read_sql_query(query, connection)
-    finally:
-        connection.close()
-
-
-def get_budgets():
-    connection = get_connection()
-
-    query = """
-        SELECT
-            category,
-            budget
-        FROM budgets
-        ORDER BY category
-    """
-
-    try:
-        return pd.read_sql_query(query, connection)
-    finally:
-        connection.close()
-
-
-def rebalance_demo_budgets_if_all_over():
-    """Create a mixed budget state when the development data is all over budget.
-
-    This is only a demo safeguard. It leaves an already mixed/customized
-    budget setup untouched.
-    """
-    connection = get_connection()
-    try:
-        budgets = pd.read_sql_query(
-            "SELECT category, budget FROM budgets ORDER BY category",
-            connection,
-        )
-        expenses = pd.read_sql_query(
-            """
-            SELECT category, SUM(amount) AS spent
-            FROM transactions
-            WHERE LOWER(TRIM(type)) = 'expense'
-            GROUP BY category
-            """,
-            connection,
-        )
-
-        if budgets.empty or expenses.empty:
-            return
-
-        merged = budgets.merge(expenses, on="category", how="left")
-        merged["spent"] = pd.to_numeric(merged["spent"], errors="coerce").fillna(0)
-        merged["budget"] = pd.to_numeric(merged["budget"], errors="coerce").fillna(0)
-        active = merged[merged["spent"] > 0].copy()
-
-        # Only alter the demo data when every spending category is over budget.
-        if active.empty or not (active["spent"] > active["budget"]).all():
-            return
-
-        # Deliberately create a useful mix for the UI demo:
-        # 0,3,... = comfortably under; 1,4,... = over; 2,5,... = near limit.
-        active = active.sort_values("spent", ascending=False).reset_index(drop=True)
-        multipliers = (1.20, 0.75, 1.05)
-
-        for i, row in active.iterrows():
-            spent = float(row["spent"])
-            new_budget = round(spent * multipliers[i % len(multipliers)], 2)
-            connection.execute(
-                "UPDATE budgets SET budget = ? WHERE category = ?",
-                (new_budget, row["category"]),
-            )
-
-        connection.commit()
-    except Exception as exc:
-        connection.rollback()
-        # Keep the app usable; the Budget page will still show the real values.
-        print(f"Budget demo rebalance skipped: {exc}")
-    finally:
-        connection.close()
-
-
-# Run once when the current development database has every active category over budget.
-rebalance_demo_budgets_if_all_over()
-
-
-def add_transaction(
-    transaction_date,
-    transaction_type,
-    category,
-    description,
-    amount,
-    payment_method,
-):
-    connection = get_connection()
-
-    try:
-        connection.execute(
-            """
-            INSERT INTO transactions
-            (
-                date,
-                type,
-                category,
-                description,
-                amount,
-                payment_method
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                transaction_date.isoformat(),
-                transaction_type,
-                category,
-                description.strip(),
-                float(amount),
-                payment_method,
-            ),
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-def update_transaction(
-    transaction_id,
-    transaction_date,
-    transaction_type,
-    category,
-    description,
-    amount,
-    payment_method,
-):
-    connection = get_connection()
-
-    try:
-        connection.execute(
-            """
-            UPDATE transactions
-            SET
-                date = ?,
-                type = ?,
-                category = ?,
-                description = ?,
-                amount = ?,
-                payment_method = ?
-            WHERE id = ?
-            """,
-            (
-                transaction_date.isoformat(),
-                transaction_type,
-                category,
-                description.strip(),
-                float(amount),
-                payment_method,
-                int(transaction_id),
-            ),
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
-
-
-def delete_transaction(transaction_id):
-    connection = get_connection()
-
-    try:
-        connection.execute(
-            "DELETE FROM transactions WHERE id = ?",
-            (int(transaction_id),),
-        )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    finally:
-        connection.close()
 
 
 # ============================================================
@@ -1281,6 +369,44 @@ def detect_chat_intent(question):
     ]):
         return "income"
 
+    # General financial-education questions must be routed to RAG
+    # before broad expense keywords. Words such as "expenses" may appear
+    # as context in a question without asking for the user's expense total.
+    knowledge_question_cues = [
+        "emergency fund",
+        "emergency savings",
+        "how much should i keep",
+        "how much money should i keep",
+        "monthly essential expenses",
+        "essential monthly expenses",
+        "what is ",
+        "explain ",
+        "difference between",
+        "how do i calculate",
+        "how should i calculate",
+        "how can i calculate",
+        "how should i build",
+        "how can i build",
+        "how do i build",
+        "what should i know about",
+        "how does ",
+    ]
+    explicit_personal_data_cues = [
+        "how much did i spend",
+        "how much have i spent",
+        "what are my expenses",
+        "what is my total expense",
+        "what are my total expenses",
+        "show my expenses",
+        "total spending",
+        "my total spending",
+    ]
+    if (
+        any(term in text for term in knowledge_question_cues)
+        and not any(term in text for term in explicit_personal_data_cues)
+    ):
+        return "general"
+
     # Expense/category questions
     if any(term in text for term in [
         "expense",
@@ -1404,7 +530,7 @@ def answer_chat_question(question, df):
                 f"| 💸 Recorded expenses | ₹{expenses:,.2f} |\n"
                 f"| 💰 Net savings | ₹{savings:,.2f} |\n"
                 f"| 📈 Savings rate | {savings_rate:.1f}% |\n\n"
-                f"**FinanceAI insight:** {assessment}"
+                f"**Finlytic AI insight:** {assessment}"
             )
 
         return (
@@ -1630,49 +756,37 @@ def answer_chat_question(question, df):
     # General questions -> local semantic RAG
     # --------------------------------------------------------
 
-    if intent == "general":
+    if intent in {"general", "advice"}:
         try:
             # Load semantic RAG only when the user actually asks a
             # knowledge-base question. This avoids loading
             # SentenceTransformer/Transformers during login.
-            from src.rag_engine import retrieve_context
-
-            rag_context = retrieve_context(
-                question,
-                top_k=3,
+            from src.rag_engine import (
+                NO_CONTEXT_MESSAGE,
+                format_context,
+                retrieve_chunks,
             )
 
-            # Keep only semantically relevant RAG chunks.
-            # RAG returns chunks separated by "---" and formats
-            # metadata as **Relevance:** 0.xxx.
-            if rag_context != "No relevant knowledge-base context was found.":
-                import re
-                sections = re.split(r"\n\s*---\s*\n", rag_context)
-                filtered_sections = []
+            # The retriever already drops chunks below its per-mode
+            # relevance threshold, so no further filtering is needed here.
+            rag_context = format_context(retrieve_chunks(question, top_k=3))
 
-                for section in sections:
-                    match = re.search(
-                        r"\*{0,2}Relevance:\*{0,2}\s*([0-9.]+)",
-                        section,
-                        flags=re.IGNORECASE,
+            if rag_context != NO_CONTEXT_MESSAGE:
+                try:
+                    return answer_with_llm(
+                        question,
+                        df,
+                        retrieved_context=rag_context,
                     )
-                    if match and float(match.group(1)) >= 0.40:
-                        filtered_sections.append(section.strip())
-
-                if filtered_sections:
-                    rag_context = "\n\n---\n\n".join(filtered_sections)
-                else:
-                    rag_context = "No relevant knowledge-base context was found."
-
-            if rag_context != "No relevant knowledge-base context was found.":
-                return (
-                    "📚 **FinanceAI Knowledge Base**\n\n"
-                    "Here is relevant information from the local "
-                    "FinanceAI knowledge base:\n\n"
-                    f"{rag_context}\n\n"
-                    "ℹ️ This answer is based on the local FinanceAI "
-                    "knowledge base."
-                )
+                except Exception:
+                    # Keep the retrieved material available if the live model fails.
+                    return (
+                        "📚 **Finlytic AI Knowledge Base**\n\n"
+                        "Relevant local reference material:\n\n"
+                        f"{rag_context}\n\n"
+                        "The language model could not generate a response, "
+                        "so the retrieved passages are shown directly."
+                    )
         except Exception:
             pass
 
@@ -1697,7 +811,7 @@ def answer_chat_question(question, df):
 st.sidebar.markdown(
     """
     <div class="finance-brand">
-        <div class="finance-brand-title">💰 Finance<span>AI</span></div>
+        <div class="finance-brand-title">💰 Finlytic<span>AI</span></div>
         <div class="finance-brand-subtitle">Personal Finance Command Center</div>
     </div>
     """,
@@ -1709,8 +823,8 @@ st.sidebar.markdown(
     f"""
 <div style="background:#101C2D;border:1px solid #26374D;border-radius:14px;padding:12px;margin:4px 0 12px;">
 <div style="font-size:10px;color:#94A3B8;font-weight:700;letter-spacing:.08em;">SIGNED IN AS</div>
-<div style="font-size:14px;font-weight:800;color:#F8FAFC;margin-top:4px;">👤 {st.session_state.user_name}</div>
-<div style="font-size:11px;color:#94A3B8;margin-top:3px;word-break:break-word;">{st.session_state.user_email}</div>
+<div style="font-size:14px;font-weight:800;color:#F8FAFC;margin-top:4px;">👤 {html.escape(str(st.session_state.user_name))}</div>
+<div style="font-size:11px;color:#94A3B8;margin-top:3px;word-break:break-word;">{html.escape(str(st.session_state.user_email))}</div>
 </div>
 """,
     unsafe_allow_html=True,
@@ -1718,7 +832,7 @@ st.sidebar.markdown(
 
 if st.sidebar.button(
     "🚪 Logout",
-    use_container_width=True,
+    width="stretch",
     key="logout_button",
 ):
     clear_current_user()
@@ -1761,7 +875,7 @@ if page == "🏠 Dashboard":
         """
 <div class="hero">
     <div>
-        <div class="hero-kicker">FINANCEAI • PERSONAL FINANCE COMMAND CENTER</div>
+        <div class="hero-kicker">FINLYTIC AI • PERSONAL FINANCE COMMAND CENTER</div>
         <h1>Good to see you 👋</h1>
         <p>Understand your money, track your spending and stay ahead of your financial goals.</p>
     </div>
@@ -1962,7 +1076,7 @@ if page == "🏠 Dashboard":
                     yaxis=dict(showgrid=True, gridcolor="#243247", title=None, tickprefix="₹"),
                     hoverlabel=dict(bgcolor="#111827", font_color="#F9FAFB"),
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
             else:
                 st.info("Valid transaction dates are needed to show the monthly trend.")
 
@@ -1996,7 +1110,7 @@ if page == "🏠 Dashboard":
                     legend=dict(orientation="h", y=-0.08, x=0.02),
                     showlegend=True,
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
             else:
                 st.info("No expense data available.")
 
@@ -2048,7 +1162,9 @@ if page == "🏠 Dashboard":
             else:
                 predicted_expense = float(prediction["prediction"])
                 prediction_date = prediction["date"].date()
-                historical_average = float(expenses_df["amount"].mean()) if not expenses_df.empty else 0
+                historical_average = float(
+                    prediction.get("historical_daily_average", 0)
+                )
                 expected_change = (
                     (predicted_expense - historical_average) / historical_average * 100
                     if historical_average > 0
@@ -2058,28 +1174,38 @@ if page == "🏠 Dashboard":
                 p1, p2, p3 = st.columns(3, gap="medium")
                 with p1:
                     st.markdown(
-                        f'<div class="prediction-card purple-border"><div class="prediction-label">PREDICTED NEXT EXPENSE</div><div class="prediction-value">₹{predicted_expense:,.2f}</div><div class="prediction-note">For {prediction_date}</div></div>',
+                        f'<div class="prediction-card purple-border"><div class="prediction-label">PREDICTED NEXT-DAY TOTAL</div><div class="prediction-value">₹{predicted_expense:,.2f}</div><div class="prediction-note">For {prediction_date}</div></div>',
                         unsafe_allow_html=True,
                     )
                 with p2:
                     st.markdown(
-                        f'<div class="prediction-card blue-border"><div class="prediction-label">HISTORICAL AVERAGE</div><div class="prediction-value">₹{historical_average:,.2f}</div><div class="prediction-note">Average expense amount</div></div>',
+                        f'<div class="prediction-card blue-border"><div class="prediction-label">AVERAGE DAILY SPENDING</div><div class="prediction-value">₹{historical_average:,.2f}</div><div class="prediction-note">Calendar-day average, including zero-spend days</div></div>',
                         unsafe_allow_html=True,
                     )
                 with p3:
                     change_color = "#EF4444" if expected_change > 0 else "#10B981"
                     change_text = f"{expected_change:+.1f}%"
                     st.markdown(
-                        f'<div class="prediction-card" style="border-top:3px solid {change_color};"><div class="prediction-label">EXPECTED CHANGE</div><div class="prediction-value">{change_text}</div><div class="prediction-note">Compared with historical average</div></div>',
+                        f'<div class="prediction-card" style="border-top:3px solid {change_color};"><div class="prediction-label">EXPECTED CHANGE</div><div class="prediction-value">{change_text}</div><div class="prediction-note">Compared with average daily spending</div></div>',
                         unsafe_allow_html=True,
                     )
 
+                latest_record_date = prediction.get("latest_record_date")
+                if latest_record_date is not None:
+                    latest_record_date = pd.to_datetime(latest_record_date).date()
+                    st.caption(
+                        f"Forecast is based on records through {latest_record_date}. "
+                        "This estimates the next calendar day's total; it is not a real-time forecast."
+                    )
+                    if (pd.Timestamp.today().date() - latest_record_date).days > 14:
+                        st.warning("Your transaction history is more than 14 days old. Add recent transactions before relying on this forecast.")
+
                 if expected_change > 0:
-                    st.warning(f"⚠️ Predicted expense is {expected_change:.1f}% higher than your historical average.")
+                    st.warning(f"⚠️ Predicted daily spending is {expected_change:.1f}% higher than your historical daily average.")
                 elif expected_change < 0:
-                    st.success(f"✅ Predicted expense is {abs(expected_change):.1f}% lower than your historical average.")
+                    st.success(f"✅ Predicted daily spending is {abs(expected_change):.1f}% lower than your historical daily average.")
                 else:
-                    st.info("Predicted expense is close to your historical average.")
+                    st.info("Predicted daily spending is close to your historical daily average.")
 
                 with st.expander("⚙️ View ML Model Performance"):
                     m1, m2, m3 = st.columns(3)
@@ -2089,6 +1215,14 @@ if page == "🏠 Dashboard":
                         st.metric("RMSE", f"₹{prediction['rmse']:,.2f}")
                     with m3:
                         st.metric("R²", f"{prediction['r2']:.4f}")
+                    baseline = f"₹{prediction['baseline_mae']:,.2f}"
+                    if prediction["beats_baseline"]:
+                        st.success(f"Beats the naive 7-day-average baseline (MAE {baseline}) on the held-out days.")
+                    else:
+                        st.warning(
+                            f"Does not beat the naive 7-day-average baseline (MAE {baseline}) on the held-out days; "
+                            "treat this forecast as indicative only."
+                        )
 
         except Exception as exc:
             st.warning(f"Expense prediction unavailable: {exc}")
@@ -2214,7 +1348,7 @@ elif page == "💳 Transactions":
         if st.button(
             "➕ Add Transaction",
             key="add_transaction_button",
-            use_container_width=True,
+            width="stretch",
         ):
             st.session_state.transaction_mode = "add"
             st.session_state.editing_transaction_id = None
@@ -2317,11 +1451,11 @@ elif page == "💳 Transactions":
             save_col, cancel_col = st.columns(2)
             with save_col:
                 save_clicked = st.form_submit_button(
-                    "💾 Save Transaction", use_container_width=True, type="primary"
+                    "💾 Save Transaction", width="stretch", type="primary"
                 )
             with cancel_col:
                 cancel_clicked = st.form_submit_button(
-                    "Cancel", use_container_width=True
+                    "Cancel", width="stretch"
                 )
 
         if cancel_clicked:
@@ -2379,7 +1513,7 @@ elif page == "💳 Transactions":
             with confirm_col:
                 if st.button(
                     "🗑️ Yes, Delete", key="confirm_delete_transaction",
-                    use_container_width=True, type="primary",
+                    width="stretch", type="primary",
                 ):
                     try:
                         delete_transaction(delete_id)
@@ -2391,7 +1525,7 @@ elif page == "💳 Transactions":
             with cancel_col:
                 if st.button(
                     "Keep Transaction", key="cancel_delete_transaction",
-                    use_container_width=True,
+                    width="stretch",
                 ):
                     st.session_state.delete_transaction_id = None
                     st.rerun()
@@ -2486,7 +1620,7 @@ elif page == "💳 Transactions":
 
         st.dataframe(
             table_df,
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             column_config={
                 "ID": st.column_config.NumberColumn("ID", width="small"),
@@ -2524,7 +1658,7 @@ elif page == "💳 Transactions":
         with edit_col:
             if st.button(
                 "✏️ Edit Selected", key="edit_transaction",
-                use_container_width=True, type="primary",
+                width="stretch", type="primary",
             ):
                 st.session_state.transaction_mode = "edit"
                 st.session_state.editing_transaction_id = int(selected_id)
@@ -2533,7 +1667,7 @@ elif page == "💳 Transactions":
         with delete_col:
             if st.button(
                 "🗑️ Delete Selected", key="delete_transaction",
-                use_container_width=True,
+                width="stretch",
             ):
                 st.session_state.delete_transaction_id = int(selected_id)
                 st.session_state.transaction_mode = "view"
@@ -2555,7 +1689,7 @@ elif page == "📊 Analysis":
         """
 <div class="hero">
     <div>
-        <div class="hero-kicker">FINANCEAI • SPENDING INTELLIGENCE</div>
+        <div class="hero-kicker">FINLYTIC AI • SPENDING INTELLIGENCE</div>
         <h1>📊 Financial Analytics</h1>
         <p>Explore spending patterns, cash flow and the categories driving your expenses.</p>
     </div>
@@ -2690,7 +1824,7 @@ elif page == "📊 Analysis":
                         legend=dict(orientation="h", y=1.08, x=0),
                         xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor=grid_color, tickprefix="₹")
                     )
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
                 else:
                     st.info("Date information is unavailable for a trend chart.")
 
@@ -2713,7 +1847,7 @@ elif page == "📊 Analysis":
                         plot_bgcolor=plot_bg, font=dict(color=text_color), showlegend=True,
                         legend=dict(font=dict(size=11))
                     )
-                    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
                 else:
                     st.info("No expense data for the selected filters.")
 
@@ -2751,7 +1885,7 @@ elif page == "📊 Analysis":
                     plot_bgcolor=plot_bg, font=dict(color=text_color), showlegend=False,
                     xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor=grid_color, tickprefix="₹")
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
             # ------------------------------------------------
             # ANALYTICAL TAKEAWAY
@@ -2807,11 +1941,30 @@ elif page == "💰 Budget":
                 transactions_df["type"] == "Expense"
             ].copy()
 
-            if expenses_df.empty:
+            # Budgets are MONTHLY limits, so they must be compared with one
+            # month of spending - never with lifetime totals.
+            expenses_df["_month"] = (
+                pd.to_datetime(expenses_df["date"], errors="coerce")
+                .dt.to_period("M").astype(str)
+            )
+            current_month = pd.Timestamp.today().strftime("%Y-%m")
+            month_options = sorted(
+                {m for m in expenses_df["_month"] if m != "NaT"} | {current_month},
+                reverse=True,
+            )
+            selected_month = st.selectbox(
+                "Budget month",
+                month_options,
+                index=month_options.index(current_month),
+                help="Budgets are monthly limits; spending shown is for this month only.",
+            )
+            period_expenses = expenses_df[expenses_df["_month"] == selected_month]
+
+            if period_expenses.empty:
                 spent_df = pd.DataFrame(columns=["category", "amount"])
             else:
                 spent_df = (
-                    expenses_df.groupby("category")["amount"]
+                    period_expenses.groupby("category")["amount"]
                     .sum()
                     .reset_index()
                 )
@@ -2833,20 +1986,6 @@ elif page == "💰 Budget":
                 axis=1,
             )
 
-            # Keep the portfolio demo visibly useful by showing all three
-            # budget-health states when the current data has no Within Budget row.
-            # This adjustment is display-only; transactions and stored budgets
-            # are not modified.
-            if not budget_df.empty and not (budget_df["status"] == "Within Budget").any():
-                preferred_category = "Food" if "Food" in budget_df["category"].astype(str).values else budget_df.iloc[0]["category"]
-                mask = budget_df["category"] == preferred_category
-                spending_value = float(budget_df.loc[mask, "amount"].iloc[0])
-                if spending_value > 0:
-                    budget_df.loc[mask, "budget"] = spending_value / 0.70
-                    budget_df.loc[mask, "remaining"] = budget_df.loc[mask, "budget"] - budget_df.loc[mask, "amount"]
-                    budget_df.loc[mask, "usage_pct"] = 70.0
-                    budget_df.loc[mask, "status"] = "Within Budget"
-
             total_budget = float(budget_df["budget"].sum())
             total_spent = float(budget_df["amount"].sum())
             total_remaining = total_budget - total_spent
@@ -2858,11 +1997,12 @@ elif page == "💰 Budget":
             with k1:
                 st.markdown(f"""<div class="kpi-card green"><div class="kpi-label">💰 TOTAL BUDGET</div><div class="kpi-value">₹{total_budget:,.2f}</div><div class="kpi-sub">Planned across {len(budget_df)} categories</div></div>""", unsafe_allow_html=True)
             with k2:
-                st.markdown(f"""<div class="kpi-card red"><div class="kpi-label">💸 ACTUAL SPENDING</div><div class="kpi-value">₹{total_spent:,.2f}</div><div class="kpi-sub">{overall_usage:.1f}% of total budget</div></div>""", unsafe_allow_html=True)
+                st.markdown(f"""<div class="kpi-card red"><div class="kpi-label">💸 SPENT IN {selected_month}</div><div class="kpi-value">₹{total_spent:,.2f}</div><div class="kpi-sub">{overall_usage:.1f}% of budgeted-category limits</div></div>""", unsafe_allow_html=True)
             with k3:
                 cls = "blue" if total_remaining >= 0 else "red"
                 label = "REMAINING" if total_remaining >= 0 else "OVER BUDGET"
-                st.markdown(f"""<div class="kpi-card {cls}"><div class="kpi-label">📌 {label}</div><div class="kpi-value">₹{abs(total_remaining):,.2f}</div><div class="kpi-sub">Available across all categories</div></div>""", unsafe_allow_html=True)
+                subtext = "Remaining across all categories" if total_remaining >= 0 else "Combined amount above category budgets"
+                st.markdown(f"""<div class="kpi-card {cls}"><div class="kpi-label">📌 {label}</div><div class="kpi-value">₹{abs(total_remaining):,.2f}</div><div class="kpi-sub">{subtext}</div></div>""", unsafe_allow_html=True)
             with k4:
                 st.markdown(f"""<div class="kpi-card orange"><div class="kpi-label">⚠️ ATTENTION NEEDED</div><div class="kpi-value">{over_count + near_count}</div><div class="kpi-sub">{over_count} over · {near_count} near limit</div></div>""", unsafe_allow_html=True)
 
@@ -2882,7 +2022,7 @@ elif page == "💰 Budget":
                     font=dict(color="#D7E0EB"), legend=dict(orientation="h", y=1.08, x=0),
                     xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor="#1F2937", tickprefix="₹"),
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
                 st.markdown("</div>", unsafe_allow_html=True)
 
             with right:
@@ -2932,126 +2072,115 @@ elif page == "💰 Budget":
             display_budget["amount"] = display_budget["amount"].map(lambda x: f"₹{x:,.2f}")
             display_budget["remaining"] = display_budget["remaining"].map(lambda x: f"₹{x:,.2f}")
             display_budget.columns = ["Category", "Budget", "Actual Spending", "Remaining", "Status"]
-            st.dataframe(display_budget, use_container_width=True, hide_index=True)
+            st.dataframe(display_budget, width="stretch", hide_index=True)
 
+            # Show expense categories without a configured budget separately;
+            # they are intentionally excluded from the budgeted-category KPIs.
+            budgeted_categories = set(budgets_df["category"].dropna().astype(str))
+            unbudgeted_expenses = period_expenses[
+                ~period_expenses["category"].astype(str).isin(budgeted_categories)
+            ]
+            if not unbudgeted_expenses.empty:
+                unbudgeted_summary = (
+                    unbudgeted_expenses.groupby("category", as_index=False)["amount"]
+                    .sum().sort_values("amount", ascending=False)
+                )
+                unbudgeted_total = float(unbudgeted_summary["amount"].sum())
+                st.markdown("<div class='section-head'>🧾 Spending Without a Category Budget</div>", unsafe_allow_html=True)
+                st.caption(
+                    f"₹{unbudgeted_total:,.2f} of {selected_month} expenses are in categories without a configured budget. "
+                    "These amounts are excluded from the budgeted-category totals above."
+                )
+                unbudgeted_summary["amount"] = unbudgeted_summary["amount"].map(lambda value: f"₹{value:,.2f}")
+                unbudgeted_summary.columns = ["Unbudgeted Category", "Recorded Spending"]
+                st.dataframe(unbudgeted_summary, width="stretch", hide_index=True)
 
             # ------------------------------------------------------------
-            # MONTHLY BUDGET DEMO SCENARIOS
+            # CATEGORY BUDGET CRUD
             # ------------------------------------------------------------
-            # The main Budget page is category-level. This section adds a
-            # month-level view so the demo can visibly show two different
-            # over-budget scenarios without changing the underlying
-            # transaction totals or the aggregate budget calculations.
+            from src.budget_manager import save_budget, delete_budget
+            with st.expander("⚙️ Manage Category Budgets", expanded=False):
+                st.caption("Create a new category budget or update an existing category's limit. Changes are saved to your account's database.")
+                with st.form("save_category_budget_form"):
+                    budget_category = st.text_input("Category", placeholder="e.g. Travel")
+                    budget_amount = st.number_input(
+                        "Budget amount (₹)", min_value=1.0, value=5000.0,
+                        step=500.0, format="%.2f",
+                    )
+                    save_budget_clicked = st.form_submit_button("Save / Update Budget", width="stretch")
+                if save_budget_clicked:
+                    try:
+                        save_budget(budget_category, budget_amount)
+                        st.success(f"Budget saved for {budget_category.strip()}.")
+                        st.rerun()
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:
+                        st.error(f"Could not save budget: {exc}")
+
+                current_categories = budgets_df["category"].dropna().astype(str).tolist()
+                if current_categories:
+                    with st.form("delete_category_budget_form"):
+                        category_to_delete = st.selectbox("Category to delete", current_categories)
+                        delete_budget_clicked = st.form_submit_button("Delete Selected Budget", width="stretch")
+                    if delete_budget_clicked:
+                        try:
+                            if delete_budget(category_to_delete):
+                                st.success(f"Budget for {category_to_delete} deleted.")
+                                st.rerun()
+                            else:
+                                st.warning("That budget no longer exists.")
+                        except Exception as exc:
+                            st.error(f"Could not delete budget: {exc}")
+                else:
+                    st.info("There are no category budgets to delete yet.")
+
+            # ------------------------------------------------------------
+            # ACTUAL MONTHLY SPENDING HISTORY (NO SYNTHETIC BUDGET LIMITS)
+            # ------------------------------------------------------------
             st.markdown(
-                "<div class='section-head'>📅 Monthly Budget Demo Scenarios</div>"
-                "<div class='section-caption'>Two intentional examples show how different categories can exceed a monthly limit. Each scenario uses the full calendar month.</div>",
+                "<div class='section-head'>📅 Monthly Spending History</div>"
+                "<div class='section-caption'>Actual recorded expenses by month and category. No illustrative limits are added to your financial data.</div>",
                 unsafe_allow_html=True,
             )
-
             monthly_expenses = expenses_df.copy()
             if not monthly_expenses.empty:
-                monthly_expenses["date"] = pd.to_datetime(
-                    monthly_expenses["date"], errors="coerce"
-                )
-                monthly_expenses["month"] = monthly_expenses["date"].dt.to_period("M").astype(str)
-
-                monthly_category = (
-                    monthly_expenses.groupby(["month", "category"])["amount"]
-                    .sum()
-                    .reset_index()
-                )
-
-                # Prefer May and July, as requested. Pick the highest-spending
-                # category in each month and make the two categories different.
-                scenario_months = ["2026-05", "2026-07"]
-                scenario_rows = []
-
-                for month_index, month_value in enumerate(scenario_months):
-                    month_rows = monthly_category[
-                        monthly_category["month"] == month_value
-                    ].copy()
-
-                    if month_rows.empty:
-                        continue
-
-                    month_rows = month_rows.sort_values(
-                        "amount", ascending=False
+                monthly_expenses["date"] = pd.to_datetime(monthly_expenses["date"], errors="coerce")
+                monthly_expenses["amount"] = pd.to_numeric(monthly_expenses["amount"], errors="coerce")
+                monthly_expenses = monthly_expenses.dropna(subset=["date", "amount"])
+                if not monthly_expenses.empty:
+                    monthly_expenses["month"] = monthly_expenses["date"].dt.to_period("M").astype(str)
+                    monthly_totals = (
+                        monthly_expenses.groupby(["month", "category"], as_index=False)["amount"]
+                        .sum()
+                        .sort_values(["month", "amount"], ascending=[True, False])
                     )
-
-                    chosen = None
-                    for _, candidate in month_rows.iterrows():
-                        if not scenario_rows or candidate["category"] != scenario_rows[0]["category"]:
-                            chosen = candidate
-                            break
-
-                    if chosen is None:
-                        chosen = month_rows.iloc[0]
-
-                    scenario_rows.append(
-                        {
-                            "month": month_value,
-                            "category": str(chosen["category"]),
-                            "actual": float(chosen["amount"]),
-                        }
+                    monthly_chart = monthly_totals.pivot(
+                        index="month", columns="category", values="amount"
+                    ).fillna(0)
+                    monthly_fig = go.Figure()
+                    for category in monthly_chart.columns:
+                        monthly_fig.add_trace(go.Bar(
+                            name=str(category), x=monthly_chart.index,
+                            y=monthly_chart[category],
+                        ))
+                    monthly_fig.update_layout(
+                        barmode="stack", height=360,
+                        margin=dict(l=10, r=10, t=20, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(color="#D7E0EB"),
+                        legend=dict(orientation="h", y=1.12, x=0),
+                        xaxis=dict(title="Month", showgrid=False),
+                        yaxis=dict(title="Recorded expenses", tickprefix="₹", gridcolor="#1F2937"),
                     )
-
-                # If May/July happen to select the same category, use the next
-                # available month/category combination to guarantee two
-                # different over-budget categories.
-                if len(scenario_rows) == 2 and scenario_rows[0]["category"] == scenario_rows[1]["category"]:
-                    alternatives = monthly_category[
-                        monthly_category["category"] != scenario_rows[0]["category"]
-                    ].sort_values(["month", "amount"], ascending=[True, False])
-                    if not alternatives.empty:
-                        alt = alternatives.iloc[0]
-                        scenario_rows[1] = {
-                            "month": str(alt["month"]),
-                            "category": str(alt["category"]),
-                            "actual": float(alt["amount"]),
-                        }
-
-                scenario_cols = st.columns(2)
-
-                for col, scenario in zip(scenario_cols, scenario_rows):
-                    actual = scenario["actual"]
-                    # Intentionally set the demo monthly limit below the
-                    # selected month's actual spending so the scenario is
-                    # visibly "Over Budget".
-                    monthly_limit = round(actual * 0.90, 2)
-                    over_amount = round(actual - monthly_limit, 2)
-                    usage = (actual / monthly_limit * 100) if monthly_limit else 0
-
-                    period = pd.Period(scenario["month"], freq="M")
-                    month_label = period.strftime("%B %Y")
-                    date_range = f"{period.start_time.strftime('%b %d, %Y')} – {period.end_time.strftime('%b %d, %Y')}"
-
-                    with col:
-                        st.markdown(
-                            f"""
-                            <div class="ui-card" style="border-top:3px solid #EF4444; min-height:190px;">
-                                <div style="display:flex;justify-content:space-between;align-items:center;">
-                                    <div class="ui-card-title">🔴 {month_label} · {scenario['category']}</div>
-                                    <div style="color:#EF4444;font-size:12px;font-weight:800;">{usage:.0f}%</div>
-                                </div>
-                                <div style="margin-top:10px;color:#9CA3AF;font-size:12px;">Period</div>
-                                <div style="font-size:12px;font-weight:700;color:#D7E0EB;margin-top:3px;">{date_range}</div>
-                                <div style="margin-top:12px;color:#9CA3AF;font-size:12px;">Monthly budget</div>
-                                <div style="font-size:22px;font-weight:800;color:#F9FAFB;margin-top:3px;">₹{monthly_limit:,.2f}</div>
-                                <div style="color:#9CA3AF;font-size:12px;margin-top:8px;">Actual spending</div>
-                                <div style="font-size:18px;font-weight:700;color:#F9FAFB;">₹{actual:,.2f}</div>
-                                <div style="margin-top:10px;color:#EF4444;font-size:12px;font-weight:700;">
-                                    ₹{over_amount:,.2f} over monthly limit
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-
-                        st.info(
-                    "These two monthly over-budget cases are intentional demo scenarios. "
-                    "They do not modify the underlying transaction totals or the aggregate "
-                    "budget calculations above."
-                )
+                    st.plotly_chart(monthly_fig, width="stretch", config={"displayModeBar": False})
+                    monthly_summary = monthly_totals.groupby("month", as_index=False)["amount"].sum()
+                    monthly_summary["amount"] = monthly_summary["amount"].map(lambda value: f"₹{value:,.2f}")
+                    monthly_summary.columns = ["Month", "Recorded Expenses"]
+                    st.dataframe(monthly_summary, width="stretch", hide_index=True)
+            else:
+                st.info("Add expense transactions to see monthly spending history.")
 
     except Exception as exc:
         st.error(f"Budget analysis failed: {exc}")
@@ -3067,7 +2196,7 @@ elif page == "🤖 AI Advisor":
         '''
 <div class="hero">
     <div>
-        <div class="hero-kicker">FINANCEAI • EXPLAINABLE FINANCIAL INSIGHTS</div>
+        <div class="hero-kicker">FINLYTIC AI • EXPLAINABLE FINANCIAL INSIGHTS</div>
         <h1>🤖 Financial Advisor</h1>
         <p>Understand your spending patterns and get practical recommendations from your current financial data.</p>
     </div>
@@ -3163,6 +2292,11 @@ elif page == "🤖 AI Advisor":
                 recommendations.append(("🎯 Watch your largest category", f"{highest_category} accounts for {highest_pct:.1f}% of expenses. Reviewing this category may have a meaningful impact on total spending."))
             else:
                 recommendations.append(("📊 Keep monitoring spending concentration", f"Your largest category is {highest_category} at {highest_pct:.1f}% of expenses. Continue tracking category trends over time."))
+            optional_reduction = highest_amount * 0.10
+            recommendations.append((
+                f"🧮 Optional {highest_category} review target",
+                f"A 10% reduction in {highest_category} would free approximately ₹{optional_reduction:,.2f} over the same recorded period. This is an illustrative target, not a required spending cut."
+            ))
 
         if expenses > income:
             recommendations.append(("🚨 Compare spending with your budget", "Your current expenses are higher than income. Use the Budget page to identify categories that are near or over their limits."))
@@ -3200,15 +2334,26 @@ elif page == "💬 Finance Chat":
         unsafe_allow_html=True,
     )
 
+    from src.config import MOCK_LLM, is_llm_configured
+    if MOCK_LLM:
+        chat_mode_label = "RULE-BASED + LOCAL MOCK RESPONSES"
+        chat_mode_detail = "Live LLM generation is off. Add an API key and set MOCK_LLM=false to enable it."
+    elif is_llm_configured():
+        chat_mode_label = "LIVE LLM CONFIGURED"
+        chat_mode_detail = "General questions can use the configured language model; account calculations remain grounded in your records."
+    else:
+        chat_mode_label = "LOCAL MODE · API KEY MISSING"
+        chat_mode_detail = "Add OPENAI_API_KEY to .env and set MOCK_LLM=false to enable live generation."
+
     st.markdown(
-        """
+        f"""
 <div class="chat-shell">
 <div class="chat-intro">
-<div class="chat-intro-title">🤖 Ask FinanceAI</div>
-<div class="chat-intro-text">Ask about income, expenses, savings, categories, predictions or unusual spending. Answers are based on your stored financial data.
-</div>
-<div class="chat-status">● FINANCIAL DATA CONNECTED</div>
-<div style="margin-top:12px;color:#93C5FD;font-size:12px;">💡 Tip: Ask a specific question such as “How much did I spend?” or “What is my predicted expense?”</div>
+<div class="chat-intro-title">🤖 Ask Finlytic AI</div>
+<div class="chat-intro-text">Ask about income, expenses, savings, categories, predictions or unusual spending. Answers are based on your stored financial data.</div>
+<div class="chat-status">● FINANCIAL DATA CONNECTED · {chat_mode_label}</div>
+<div style="margin-top:12px;color:#93C5FD;font-size:12px;">💡 {chat_mode_detail}</div>
+<div style="margin-top:8px;color:#93C5FD;font-size:12px;">Try: “How much did I spend?” or “What is my predicted expense?”</div>
 </div>
 </div>
 """,
@@ -3302,10 +2447,27 @@ Start a conversation with your financial assistant.
                     f"`{intent_labels.get(intent, intent)}`"
                 )
 
-    question = st.chat_input(
-        "Ask about your income, spending, savings or predictions...",
-        key="finance_chat_input",
-    )
+    # Use a regular Streamlit form instead of the pinned chat_input widget.
+    # This keeps the composer editable and submit-capable across browser
+    # viewport/layout variations and avoids the fixed-footer input issue.
+    with st.form("finance_chat_form", clear_on_submit=True):
+        composer_col, submit_col = st.columns([5, 1], vertical_alignment="bottom")
+        with composer_col:
+            question = st.text_input(
+                "Type your question",
+                placeholder="Ask about your income, spending, savings or financial concepts...",
+                key="finance_chat_input",
+                label_visibility="collapsed",
+            )
+        with submit_col:
+            submitted = st.form_submit_button(
+                "Send",
+                width="stretch",
+                type="primary",
+            )
+
+    if not submitted:
+        question = None
 
     if question:
 
@@ -3373,7 +2535,7 @@ Start a conversation with your financial assistant.
             if st.button(
                 "🗑️ Clear Chat",
                 key="finance_chat_clear_button",
-                use_container_width=True,
+                width="stretch",
             ):
 
                 st.session_state.chat_history = []
@@ -3443,7 +2605,7 @@ elif page == "🚨 Anomaly Detection":
             st.markdown(f"""
 <div class="advisor-banner danger">
 <div class="banner-title">🔴 {anomaly_count} transaction(s) need review</div>
-<div class="banner-text">These spending amounts were identified as unusual relative to the expense data used by the model.</div>
+<div class="banner-text">These transactions were flagged from a combination of amount, category, date and payment-method patterns. Review the explanation and context before drawing conclusions.</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -3457,7 +2619,7 @@ elif page == "🚨 Anomaly Detection":
                 st.info("No flagged transactions to display.")
             else:
                 display_columns = [
-                    "date", "category", "description", "amount", "anomaly_score"
+                    "date", "category", "description", "amount", "anomaly_score", "anomaly_reason"
                 ]
                 available_columns = [c for c in display_columns if c in anomalies_df.columns]
                 display_df = anomalies_df[available_columns].copy()
@@ -3473,8 +2635,9 @@ elif page == "🚨 Anomaly Detection":
                     "description": "Description",
                     "amount": "Amount",
                     "anomaly_score": "Anomaly Score",
+                    "anomaly_reason": "Why flagged",
                 })
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
+                st.dataframe(display_df, width="stretch", hide_index=True)
 
         with right:
             st.markdown("### 🧠 Detection Method")
@@ -3482,7 +2645,7 @@ elif page == "🚨 Anomaly Detection":
 <div class="method-card">
 <div class="method-row"><span>Model</span><strong>Isolation Forest</strong></div>
 <div class="method-row"><span>Learning</span><strong>Unsupervised ML</strong></div>
-<div class="method-row"><span>Feature</span><strong>Transaction amount</strong></div>
+<div class="method-row"><span>Features</span><strong>Amount, category, date and payment method</strong></div>
 <div class="method-row"><span>Labels required</span><strong>No</strong></div>
 </div>
 """, unsafe_allow_html=True)
@@ -3522,7 +2685,7 @@ elif page == "🚨 Anomaly Detection":
                     marker_color="#EF4444",
                     hovertemplate="%{x}<br>₹%{y:,.2f}<extra></extra>",
                 )
-                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+                st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
         st.markdown("""
 <div class="info-card">
