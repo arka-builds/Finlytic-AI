@@ -47,3 +47,17 @@ def test_every_page_renders_after_login(app):
         at.sidebar.radio[0].set_value(page)
         at.run()
         assert not at.exception, f"{page}: {at.exception}"
+
+
+def test_chat_agent_answers_from_tools_and_shows_trace(app):
+    at = _sign_up_and_log_in(app)
+    at.sidebar.radio[0].set_value("💬 Finance Chat")
+    at.run()
+    at.text_input(key="finance_chat_input").set_value("Compare my spending last month with this month")
+    submit = [b for b in at.button if b.label == "Send"][0]
+    submit.click()
+    at.run()
+    assert not at.exception, at.exception
+    reply = at.session_state["chat_history"][-1]
+    assert reply["role"] == "assistant" and reply["trace"]
+    assert reply["trace"][0]["tool"] == "compare_months"

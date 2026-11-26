@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-11-26 — AI engineering upgrade
+
+### Added
+- Tool-calling agent (`src/agent.py`): 8 validated tools, offline planner, OpenAI function-calling loop, guardrails, visible tool trace in the chat UI (agent mode on by default).
+- Hybrid retrieval: BM25 + dense/TF-IDF fused with reciprocal rank fusion, per-ranker relevance gates, per-ranker scores in results.
+- Numbered citations and a Sources footer for RAG answers.
+- Retrieval evaluation (`evals/`, `docs/RAG_EVAL.md`): 36 labelled questions, hit@k, MRR, off-topic rejection.
+- 24 new tests (62 total), including a scripted fake OpenAI client and a retrieval quality floor.
+
 ## 2026-11-25 — Portfolio polish
 
 ### Fixed

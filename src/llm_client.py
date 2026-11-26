@@ -292,6 +292,8 @@ def answer_with_llm(
         "data does not identify essential expenses or a monthly baseline, "
         "say that a personal emergency-fund target cannot yet be calculated. "
 
+        "When you use a retrieved passage, cite it with its [n] marker. "
+
         "Do not invent transactions, balances, "
         "categories, or numbers. "
 

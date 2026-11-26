@@ -66,7 +66,7 @@ def test_retrieval_thresholds_are_per_mode_and_context_is_formatted():
     assert rag_engine.MIN_RELEVANCE_SCORES["tfidf_fallback"] < rag_engine.MIN_RELEVANCE_SCORES["semantic"]
     assert rag_engine.format_context([]) == rag_engine.NO_CONTEXT_MESSAGE
     text = rag_engine.format_context([{"section": "S", "source": "f.md", "score": 0.5, "text": "body"}])
-    assert "### S" in text and "body" in text
+    assert "### [1] S" in text and "body" in text
 
 
 def test_forecast_reports_naive_baseline(tmp_path, monkeypatch):

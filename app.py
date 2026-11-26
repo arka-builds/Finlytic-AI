@@ -17,6 +17,7 @@ from src.repository import (
 from src.finance_chat import answer_question as module_answer_question
 from src.llm_client import answer_with_llm
 from src.config import SHOW_RESET_CODE
+from src import agent as finance_agent
 from src.auth import (
     init_auth_db,
     register_user,
@@ -764,20 +765,23 @@ def answer_chat_question(question, df):
             from src.rag_engine import (
                 NO_CONTEXT_MESSAGE,
                 format_context,
+                format_sources,
                 retrieve_chunks,
             )
 
             # The retriever already drops chunks below its per-mode
             # relevance threshold, so no further filtering is needed here.
-            rag_context = format_context(retrieve_chunks(question, top_k=3))
+            rag_chunks = retrieve_chunks(question, top_k=3)
+            rag_context = format_context(rag_chunks)
 
             if rag_context != NO_CONTEXT_MESSAGE:
                 try:
-                    return answer_with_llm(
+                    reply = answer_with_llm(
                         question,
                         df,
                         retrieved_context=rag_context,
                     )
+                    return f"{reply}\n\n{format_sources(rag_chunks)}"
                 except Exception:
                     # Keep the retrieved material available if the live model fails.
                     return (
@@ -2423,6 +2427,21 @@ Start a conversation with your financial assistant.
         "general": "🧠 General Financial Question",
     }
 
+    agent_mode = st.toggle(
+        "🛠️ Agent mode (tool calling)",
+        value=True,
+        key="agent_mode",
+        help="The assistant picks tools that query your data, forecast and anomaly models, and the "
+             "knowledge base. Every figure comes from a tool result; expand 'Tool calls' to inspect them.",
+    )
+
+    def render_trace(trace):
+        with st.expander(f"🔧 Tool calls ({len(trace)})"):
+            for step in trace:
+                st.code(f"{step['tool']}({step['args']})  ·  {step['ms']} ms", language="python")
+                if step["error"]:
+                    st.error(step["error"])
+
     for message in st.session_state.chat_history:
 
         role = message["role"]
@@ -2434,6 +2453,8 @@ Start a conversation with your financial assistant.
         ):
 
             st.markdown(message["content"])
+            if message.get("trace"):
+                render_trace(message["trace"])
 
             if (
                 role == "assistant"
@@ -2495,8 +2516,17 @@ Start a conversation with your financial assistant.
                 "Analyzing your financial data..."
             ):
 
+                trace = None
                 try:
-                    response = answer_chat_question(question, transactions_df)
+                    if agent_mode:
+                        agent_result = finance_agent.answer(question, transactions_df)
+                        response = agent_result.answer
+                        trace = [
+                            {"tool": c.name, "args": c.args, "ms": c.ms, "error": c.error}
+                            for c in agent_result.calls
+                        ]
+                    else:
+                        response = answer_chat_question(question, transactions_df)
 
                 except Exception as exc:
 
@@ -2510,17 +2540,20 @@ Start a conversation with your financial assistant.
                     )
 
             st.markdown(response)
+            if trace:
+                render_trace(trace)
 
-            st.caption(
-                f"🔎 Detected intent: "
-                f"`{intent_labels.get(intent, intent)}`"
-            )
+            if not agent_mode:
+                st.caption(
+                    f"🔎 Detected intent: "
+                    f"`{intent_labels.get(intent, intent)}`"
+                )
 
         st.session_state.chat_history.append(
             {
                 "role": "assistant",
                 "content": response,
-                "intent": intent,
+                **({"trace": trace} if trace else {"intent": intent}),
             }
         )
 

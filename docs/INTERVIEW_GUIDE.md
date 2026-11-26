@@ -2,7 +2,7 @@
 
 ## 30-second pitch
 
-"Finlytic AI is a multi-user personal finance app I built in Python and Streamlit. It tracks transactions and monthly budgets, forecasts next-day spending with a Random Forest, flags unusual expenses with an Isolation Forest and explains why, and has a chat assistant that answers questions about your numbers deterministically and uses RAG over a finance knowledge base for educational questions. It works fully offline, and I kept the LLM away from the arithmetic on purpose so it can't invent numbers."
+"Finlytic AI is an applied-AI project: a tool-calling agent over a user's finance data. The model chooses from eight validated tools — SQL/pandas analytics, an ML forecast, anomaly detection and a hybrid BM25-plus-embeddings RAG search with citations — and every number comes from a tool, not the model. I built a labelled retrieval eval, so I can show hybrid fusion lifting MRR from 0.80 to 0.90, and I know exactly which questions still fail and why. It degrades gracefully offline."
 
 ## 2-minute walkthrough
 
@@ -10,7 +10,8 @@
 2. **Dashboard.** KPIs, cash flow, forecast. Open "ML model performance": show the baseline comparison.
 3. **Budget.** Pick a month; explain budgets are monthly limits.
 4. **Anomaly Detection.** Show a flagged row and its reason text.
-5. **Finance Chat.** Ask "How much did I spend?" (SQL answer) then "How big should my emergency fund be?" (RAG + mock LLM; label shows mock mode).
+5. **Finance Chat (agent mode).** Ask "Compare my spending last month with this month" → expand **Tool calls** to show the chosen tool, validated args and latency. Then "How do I build an emergency fund?" → cited RAG answer.
+6. **Evals.** Run `python evals/run_rag_eval.py` and walk through the table and the missed questions.
 
 ## Decisions you should be able to defend
 
@@ -24,6 +25,19 @@
 | How are passwords stored? | PBKDF2-HMAC-SHA256, 600k iterations, random salt, versioned format, constant-time compare, auto-upgrade of old hashes. |
 | How is password reset protected? | 6-digit code, 10-minute expiry, hashed at rest, 5 attempts then invalidated. Honest gap: no email delivery. |
 
+## AI-engineering questions you will get
+
+| Question | Answer |
+|---|---|
+| Why tool calling instead of stuffing data into the prompt? | Exact numbers, small context, auditable calls, and the model can't do arithmetic reliably. The trace makes every answer inspectable. |
+| How do you stop the model misusing tools? | Schema validation before execution (types, ranges, month format, no extra args), unknown tools rejected, max 4 steps then a forced final answer, bounded outputs, errors returned to the model so it can recover. Tests cover each. |
+| Prompt injection? | Tool results are labelled data in the system prompt, tools are read-only and scoped to the signed-in user, arguments are validated. Gap: no dedicated injection test suite yet. |
+| Why hybrid retrieval? | Lexical and dense rankers fail differently. RRF needs no score calibration. Eval: hybrid 0.90 MRR vs 0.80 for each lexical ranker alone. |
+| Why gate by absolute score and not just top-k? | Top-k always returns something; off-topic questions must return nothing (6/6 rejected in eval). |
+| Weaknesses of your eval? | 36 hand-written questions, one author, a 6-section corpus, retrieval only — no answer-faithfulness metric yet. MiniLM numbers not yet reported. |
+| How would you test the LLM loop without the API? | Injected client; scripted fake model that issues a valid call, an invalid call and then answers (see `tests/test_agent.py`). |
+| What would you add for production? | Tracing and token/cost logging, answer-faithfulness evals, a FastAPI service, rate limits, caching, Postgres. |
+
 ## Bugs you found and fixed (great STAR stories)
 
 1. **Budget bug:** monthly limits were compared to lifetime spend, so everything looked over budget. Found by running an end-to-end test over every page and noticing a permanent error banner. Fixed with a month selector.
@@ -33,12 +47,10 @@
 
 ## Likely questions
 
-- **How would you evaluate the RAG?** Build a small question → expected-section set, measure hit@k and MRR for semantic vs TF-IDF, then tune thresholds. (Not done yet — say so.)
-- **How would you add citations?** `retrieve_chunks` already returns source and section; pass them to the prompt and require the model to cite them.
 - **How would you scale it?** Postgres, background jobs for model training, cache forecasts, proper auth provider, email service.
 - **What are the privacy implications of live mode?** Only an aggregate summary and retrieved text go to the API, never raw transactions.
-- **What would you refactor next?** Split `app.py` into one module per page; the chat intent logic exists in both `app.py` and `finance_chat.py` and should be unified.
+- **What would you refactor next?** Split `app.py` into one module per page; the classic chat intent logic exists in both `app.py` and `finance_chat.py` and could be removed now that agent mode is the default.
 
 ## Be upfront about
 
-Mock mode isn't a real LLM; the demo data is synthetic; no live-API run was tested here; the app has no investment-planning or CSV-import features.
+Offline mode uses a keyword planner and templates, not a real LLM; the live OpenAI loop is tested only against a fake client, not the real API; MiniLM retrieval metrics have not been run; the demo data is synthetic; the app has no investment-planning or CSV-import features.

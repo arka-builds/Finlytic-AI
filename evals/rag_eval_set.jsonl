@@ -1,0 +1,36 @@
+{"question": "What is an emergency fund?", "expected_section": "Emergency Fund"}
+{"question": "How many months of expenses should I keep in reserve?", "expected_section": "Emergency Fund"}
+{"question": "I lost my job suddenly, what money should I have set aside?", "expected_section": "Emergency Fund"}
+{"question": "Why do people keep cash aside for medical emergencies?", "expected_section": "Emergency Fund"}
+{"question": "How do I avoid borrowing when an unexpected bill arrives?", "expected_section": "Emergency Fund"}
+{"question": "How do I build a budget step by step?", "expected_section": "Budgeting"}
+{"question": "What is the workflow for planning my monthly spending?", "expected_section": "Budgeting"}
+{"question": "Is a budget a guarantee of future spending?", "expected_section": "Budgeting"}
+{"question": "Should I compare planned versus actual spending?", "expected_section": "Budgeting"}
+{"question": "How often should I review my plan for income allocation?", "expected_section": "Budgeting"}
+{"question": "How do I calculate my savings rate?", "expected_section": "Savings Rate"}
+{"question": "What percentage of income am I keeping after expenses?", "expected_section": "Savings Rate"}
+{"question": "If I earn 50000 and spend 40000 what do I save?", "expected_section": "Savings Rate"}
+{"question": "Why must the income and expense periods match?", "expected_section": "Savings Rate"}
+{"question": "What is the formula for (income - expenses) / income?", "expected_section": "Savings Rate"}
+{"question": "What is the difference between needs and wants?", "expected_section": "Needs and Wants"}
+{"question": "Is Netflix essential or discretionary spending?", "expected_section": "Needs and Wants"}
+{"question": "Which expenses are required for basic living?", "expected_section": "Needs and Wants"}
+{"question": "Are discretionary purchases that add comfort a necessity?", "expected_section": "Needs and Wants"}
+{"question": "Is the line between essential and optional spending the same for everyone?", "expected_section": "Needs and Wants"}
+{"question": "What should I know before repaying a loan?", "expected_section": "Debt Management"}
+{"question": "What happens if I only pay the minimum on my credit card?", "expected_section": "Debt Management"}
+{"question": "Why does paying the minimum increase total interest?", "expected_section": "Debt Management"}
+{"question": "What details of my debt should I understand, like interest rate and fees?", "expected_section": "Debt Management"}
+{"question": "How does a repayment schedule affect the balance I owe?", "expected_section": "Debt Management"}
+{"question": "Is this app giving professional financial advice?", "expected_section": "Financial Safety"}
+{"question": "Does tax law or risk tolerance affect personal finance decisions?", "expected_section": "Financial Safety"}
+{"question": "What should the assistant do when data is missing?", "expected_section": "Financial Safety"}
+{"question": "Will the assistant make up facts about my transactions?", "expected_section": "Financial Safety"}
+{"question": "Is the information here general or personalised?", "expected_section": "Financial Safety"}
+{"question": "Who won the football world cup?", "expected_section": null}
+{"question": "What is the capital of France?", "expected_section": null}
+{"question": "How do I bake sourdough bread?", "expected_section": null}
+{"question": "Explain quantum entanglement.", "expected_section": null}
+{"question": "Write a poem about the ocean.", "expected_section": null}
+{"question": "What is the best programming language for games?", "expected_section": null}

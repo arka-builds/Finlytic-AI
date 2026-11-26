@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List
 from functools import lru_cache
+import math
 import re
+from collections import Counter
 
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -34,6 +36,14 @@ MIN_RELEVANCE_SCORES = {
     "tfidf_fallback": 0.15,
 }
 NO_CONTEXT_MESSAGE = "No relevant knowledge-base context was found."
+
+# BM25 scores are unbounded, so they are normalised by the best score a
+# perfect query match could reach (sum of the query terms' IDF) before gating.
+MIN_BM25_NORMALISED = 0.30
+BM25_K1 = 1.5
+BM25_B = 0.75
+RRF_K = 60  # standard reciprocal-rank-fusion damping constant
+RETRIEVAL_METHODS = ("hybrid", "dense", "bm25")
 MAX_WORDS = 180
 OVERLAP_WORDS = 30
 
@@ -188,6 +198,60 @@ def get_embedding_model():
 
 
 # ============================================================
+# BM25 lexical ranker
+# ============================================================
+
+_TOKEN = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset(
+    "a an the and or of to in on for is are be it its i my me do does how what "
+    "should can this that with as at by from".split()
+)
+
+
+def tokenize(text: str) -> List[str]:
+    return [t for t in _TOKEN.findall(text.lower()) if t not in _STOPWORDS]
+
+
+class BM25:
+    """Okapi BM25 over pre-tokenised documents (no external dependency)."""
+
+    def __init__(self, documents: List[List[str]], k1=BM25_K1, b=BM25_B):
+        self.k1, self.b = k1, b
+        self.doc_freqs = [Counter(d) for d in documents]
+        self.doc_len = np.array([len(d) for d in documents], dtype=float)
+        self.avg_len = float(self.doc_len.mean()) if len(documents) else 0.0
+        n = len(documents)
+        df = Counter(t for d in documents for t in set(d))
+        self.idf = {
+            t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()
+        }
+
+    def scores(self, query_tokens: List[str]):
+        """Return (raw_scores, max_attainable) for a tokenised query."""
+        raw = np.zeros(len(self.doc_freqs))
+        terms = [t for t in set(query_tokens) if t in self.idf]
+        for i, freqs in enumerate(self.doc_freqs):
+            for t in terms:
+                f = freqs.get(t, 0)
+                if f:
+                    denom = f + self.k1 * (
+                        1 - self.b + self.b * self.doc_len[i] / (self.avg_len or 1)
+                    )
+                    raw[i] += self.idf[t] * f * (self.k1 + 1) / denom
+        ceiling = sum(self.idf[t] for t in terms) * (self.k1 + 1) or 1.0
+        return raw, ceiling
+
+
+def reciprocal_rank_fusion(rankings: List[List[int]], k: int = RRF_K):
+    """Fuse several best-first index rankings into one {index: score} map."""
+    fused: dict = {}
+    for ranking in rankings:
+        for rank, idx in enumerate(ranking):
+            fused[idx] = fused.get(idx, 0.0) + 1.0 / (k + rank + 1)
+    return fused
+
+
+# ============================================================
 # Semantic RAG Retriever
 # ============================================================
 
@@ -202,11 +266,13 @@ class LocalRAGRetriever:
         self.vectorizer = None
         self.tfidf_matrix = None
         self.retrieval_mode = "unavailable"
+        self.bm25 = None
 
         if not self.chunks:
             return
 
         documents = [chunk.text for chunk in self.chunks]
+        self.bm25 = BM25([tokenize(f"{c.section} {c.text}") for c in self.chunks])
         try:
             self.model = get_embedding_model()
             self.embeddings = self.model.encode(
@@ -229,60 +295,76 @@ class LocalRAGRetriever:
     # Retrieve relevant chunks
     # --------------------------------------------------------
 
+    def _vector_scores(self, query: str):
+        """Dense (or TF-IDF fallback) cosine scores for every chunk."""
+        if self.retrieval_mode == "semantic":
+            q = self.model.encode(query, normalize_embeddings=True, show_progress_bar=False)
+            return np.dot(np.asarray(self.embeddings), np.asarray(q))
+        return cosine_similarity(self.tfidf_matrix, self.vectorizer.transform([query])).ravel()
+
     def retrieve(
         self,
         query: str,
-        top_k: int = DEFAULT_TOP_K
+        top_k: int = DEFAULT_TOP_K,
+        method: str = "hybrid",
     ):
+        """Return relevance-gated chunks, best first.
 
-        if not self.chunks:
+        method:
+          * ``dense``  - embedding cosine (TF-IDF cosine when offline)
+          * ``bm25``   - lexical BM25
+          * ``hybrid`` - reciprocal-rank fusion of both rankers
+
+        A chunk is returned only if at least one ranker scores it above that
+        ranker's absolute relevance threshold, so off-topic questions return
+        nothing instead of the "least bad" chunk.
+        """
+        if method not in RETRIEVAL_METHODS:
+            raise ValueError(f"method must be one of {RETRIEVAL_METHODS}")
+        if not self.chunks or not query or not query.strip():
             return []
-
-        if not query or not query.strip():
-            return []
-
         if self.embeddings is None and self.tfidf_matrix is None:
             return []
 
         top_k = max(1, min(int(top_k), len(self.chunks)))
+        dense = self._vector_scores(query)
+        raw_bm25, ceiling = self.bm25.scores(tokenize(query))
+        lexical = raw_bm25 / ceiling
 
-        if self.retrieval_mode == "semantic":
-            query_embedding = self.model.encode(
-                query, normalize_embeddings=True, show_progress_bar=False
-            )
-            scores = np.dot(
-                np.asarray(self.embeddings), np.asarray(query_embedding)
-            )
+        dense_gate = MIN_RELEVANCE_SCORES[self.retrieval_mode]
+        passes = (dense >= dense_gate) | (lexical >= MIN_BM25_NORMALISED)
+        if method == "dense":
+            passes = dense >= dense_gate
+            order = np.argsort(dense)[::-1]
+            fused = {int(i): float(dense[i]) for i in order}
+        elif method == "bm25":
+            passes = lexical >= MIN_BM25_NORMALISED
+            order = np.argsort(lexical)[::-1]
+            fused = {int(i): float(lexical[i]) for i in order}
         else:
-            query_vector = self.vectorizer.transform([query])
-            scores = cosine_similarity(self.tfidf_matrix, query_vector).ravel()
+            fused = reciprocal_rank_fusion([
+                [int(i) for i in np.argsort(dense)[::-1]],
+                [int(i) for i in np.argsort(lexical)[::-1]],
+            ])
 
-        ranked_indices = np.argsort(
-            scores
-        )[::-1]
-
+        ranked = sorted(fused, key=fused.get, reverse=True)
         results = []
-
-        for index in ranked_indices[:top_k]:
-
-            score = float(scores[index])
-
-            # Ignore weak/unrelated matches
-            if score < MIN_RELEVANCE_SCORES[self.retrieval_mode]:
+        for index in ranked:
+            if not passes[index]:
                 continue
-
             chunk = self.chunks[index]
-
-            results.append(
-                {
-                    "source": chunk.source,
-                    "section": chunk.section,
-                    "chunk_id": chunk.chunk_id,
-                    "score": score,
-                    "text": chunk.text
-                }
-            )
-
+            results.append({
+                "source": chunk.source,
+                "section": chunk.section,
+                "chunk_id": chunk.chunk_id,
+                "score": float(max(dense[index], 0.0)),
+                "dense_score": float(dense[index]),
+                "bm25_score": float(lexical[index]),
+                "fused_score": float(fused[index]),
+                "text": chunk.text,
+            })
+            if len(results) == top_k:
+                break
         return results
 
 
@@ -303,28 +385,36 @@ def get_retriever():
 # Public retrieve_context() function
 # ============================================================
 
-def retrieve_chunks(query: str, top_k: int = DEFAULT_TOP_K):
+def retrieve_chunks(query: str, top_k: int = DEFAULT_TOP_K, method: str = "hybrid"):
     """Return relevance-filtered chunks as structured dictionaries."""
-    return get_retriever().retrieve(query, top_k=top_k)
+    return get_retriever().retrieve(query, top_k=top_k, method=method)
 
 
 def format_context(results) -> str:
-    """Render retrieved chunks as Markdown for display or LLM prompts."""
+    """Render retrieved chunks as numbered Markdown so answers can cite [n]."""
     if not results:
         return NO_CONTEXT_MESSAGE
 
     return "\n\n---\n\n".join(
-        f"### {r['section']}\n"
+        f"### [{n}] {r['section']}\n"
         f"**Source:** {r['source']}  \n"
         f"**Relevance:** {r['score']:.3f}\n\n"
         f"{r['text']}"
-        for r in results
+        for n, r in enumerate(results, start=1)
     )
 
 
-def retrieve_context(query: str, top_k: int = DEFAULT_TOP_K) -> str:
+def format_sources(results) -> str:
+    """Markdown footer listing the passages an answer was grounded on."""
+    if not results:
+        return ""
+    lines = [f"- [{n}] **{r['section']}** — `{r['source']}`" for n, r in enumerate(results, start=1)]
+    return "**Sources**\n" + "\n".join(lines)
+
+
+def retrieve_context(query: str, top_k: int = DEFAULT_TOP_K, method: str = "hybrid") -> str:
     """Retrieve and format knowledge-base context for ``query``."""
-    return format_context(retrieve_chunks(query, top_k=top_k))
+    return format_context(retrieve_chunks(query, top_k=top_k, method=method))
 
 
 # ============================================================
